@@ -81,6 +81,13 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 							<td>To protect your account and investigate problems</td>
 							<td>Our servers in New Zealand</td>
 						</tr>
+						<tr>
+							<th scope="row">
+								Abuse checks: hashed network address, device, shop and card fingerprints
+							</th>
+							<td>To keep the free plan fair and stop bots and scraping</td>
+							<td>Our servers in New Zealand</td>
+						</tr>
 					</tbody>
 				</table>
 			</div>
@@ -199,6 +206,26 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 				requested, that log holds the email address that was typed, because there is no account to
 				name instead.
 			</p>
+			<p>
+				For each request we also log when it came, what it asked for, the IP address and the
+				browser's own description of itself (its user agent). We use these to spot and block
+				automated access, such as scraping, bots and AI crawlers, which our{' '}
+				<a class="link" href="/terms/#automated">Terms</a> do not allow.
+			</p>
+
+			<h3 id="abuse">Abuse-detection records</h3>
+			<p>
+				Each person may hold one free account, as section 5 of our{' '}
+				<a class="link" href="/terms/#one-account">Terms</a> says. To spot one person making
+				several, we keep a few signals for each account and compare them between accounts: the IP
+				address and browser you sign up and sign in from, the device ID of the Teachouse app, the
+				identity of each marketplace shop you connect, the card fingerprint Stripe gives us (a code
+				for the card, never its number), and the domain part of your email address. Each one except
+				the domain is stored only as a keyed one-way hash, so we can tell when two accounts share
+				one but can't read it back. We use them only to keep the free plan fair and Teachouse
+				secure. We don't buy data about you or run fingerprinting scripts, and a person looks at
+				every flag before we act on it.
+			</p>
 
 			<h3>Messages</h3>
 			<p>
@@ -237,7 +264,10 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 					your password changed, and telling you when an import or a publish has finished or needs
 					you. We do not send marketing email.
 				</li>
-				<li>To stop abuse, such as automated sign-ups, and to keep accounts secure.</li>
+				<li>
+					To stop abuse, such as automated sign-ups, extra free accounts, scraping and bots, and to
+					keep accounts secure.
+				</li>
 				<li>To find and fix problems, and to understand which parts of Teachouse are used.</li>
 				<li>To answer you when you contact us.</li>
 				<li>To meet legal duties, such as keeping tax records.</li>
@@ -259,8 +289,9 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 					email that goes with them. We cannot provide Teachouse without them.
 				</li>
 				<li>
-					<strong>Legitimate interests:</strong> security records, stopping abuse, and product
-					analytics. We keep these to what we need, and you can object (see{' '}
+					<strong>Legitimate interests:</strong> security records, stopping abuse (including the
+					abuse-detection records and request logs), and product analytics. We keep these to what we
+					need, and you can object (see{' '}
 					<a class="link" href="#rights">section 10</a>).
 				</li>
 				<li>
@@ -288,7 +319,9 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 					<tbody>
 						<tr>
 							<th scope="row">Cloudflare</th>
-							<td>Delivers our website and blocks automated sign-ups (Turnstile)</td>
+							<td>
+								Delivers our website, blocks automated sign-ups (Turnstile) and filters out bots
+							</td>
 							<td>Your IP address, browser details and the pages you request</td>
 							<td>Global network</td>
 						</tr>
@@ -370,6 +403,15 @@ const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-
 				<li>
 					<strong>Security log and server logs:</strong> kept only as long as we need them to
 					investigate problems and protect accounts.
+				</li>
+				<li>
+					<strong>Abuse-detection records:</strong> the hashed IP address and browser are deleted
+					after 90 days. The other signals are kept while your account exists and deleted with it.
+					Two things outlast an account: a note that a shop has had its free moves (a hash of the
+					shop and the date), kept for as long as we offer the free plan, so deleting and making an
+					account again doesn't bring them back; and, for a suspended account only, hashes of its
+					email address, shops, devices and cards, kept for 24 months from the suspension, or until
+					we lift it, so they can't be used to sign up again.
 				</li>
 				<li>
 					<strong>Billing records:</strong> kept for as long as tax law requires, which in New

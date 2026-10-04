@@ -34,6 +34,7 @@ pub mod broker;
 pub mod catalogue;
 pub mod collections;
 pub mod consent;
+pub mod crawlers;
 pub mod devices;
 pub mod duplicates;
 pub mod entitlement;

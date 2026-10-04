@@ -240,7 +240,60 @@ pub(crate) enum Destination {
 /// The console host's `robots.txt`. The console is drawn in the browser
 /// behind a sign-in and holds nothing a crawler can use, so every path is
 /// refused; the landing host's own file keeps answering on the apex.
-pub(crate) const CONSOLE_ROBOTS: &str = "User-agent: *\nDisallow: /\n";
+///
+/// The AI crawlers are named in a group of their own ahead of the catch-all,
+/// because some of them read only a group that names them and treat `*` as
+/// someone else's rule. The list is `tam_api::crawlers::AI_CRAWLERS`, the
+/// one the landing's file and [`refused_agent`] read.
+pub(crate) static CONSOLE_ROBOTS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut robots = String::new();
+    for name in tam_api::crawlers::AI_CRAWLERS {
+        robots.push_str("User-agent: ");
+        robots.push_str(name);
+        robots.push('\n');
+    }
+    robots.push_str("Disallow: /\n\nUser-agent: *\nDisallow: /\n");
+    robots
+});
+
+/// The answer to a crawler [`refused_agent`] names, on the API and the
+/// console. Plain text, because nothing that reads it is a browser.
+pub(crate) const REFUSED_AGENT_BODY: &str =
+    "Automated access to Teachouse is not allowed. See https://teachouse.io/terms/#automated\n";
+
+/// The names [`refused_agent`] looks for, compiled once into one automaton
+/// so a request costs one pass over its `User-Agent` whatever the list's
+/// length, case-insensitively because crawlers do not agree on case.
+static REFUSED_AGENTS: std::sync::LazyLock<Option<aho_corasick::AhoCorasick>> =
+    std::sync::LazyLock::new(|| {
+        aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(tam_api::crawlers::matched_in_user_agent())
+            .ok()
+    });
+
+/// Whether `user_agent` names one of the AI crawlers or scrapers the terms
+/// refuse ("Automated access"). A browser, the Teachouse app and a search
+/// engine are not on the list; see `tam_api::crawlers` for what is and for
+/// the names too broad to look for.
+pub(crate) fn refused_agent(user_agent: &str) -> bool {
+    REFUSED_AGENTS
+        .as_ref()
+        .is_some_and(|names| names.is_match(user_agent))
+}
+
+/// Whether a request for `path`, answered by `answer` on `tier`, is one the
+/// crawler check guards: the API, every console path, and everything on the
+/// console host. The landing's pages, its assets, the installers and the
+/// landing's own `robots.txt` stay open, because `robots.txt` and the page
+/// meta are how the landing asks, and a crawler has to be able to read the
+/// asking.
+pub(crate) fn guarded_from_crawlers(tier: HostTier, path: &str, answer: &Answer) -> bool {
+    if path == "/robots.txt" {
+        return false;
+    }
+    tier == HostTier::Console || matches!(answer, Answer::Api | Answer::Console)
+}
 
 /// How long a host redirect may be reused. Five minutes, the same as a
 /// landing page: a client that cached the redirect follows it without a round
@@ -456,7 +509,20 @@ pub(crate) fn console_robots() -> axum::response::Response {
             ),
             (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
         ],
-        CONSOLE_ROBOTS,
+        CONSOLE_ROBOTS.as_str(),
+    )
+        .into_response()
+}
+
+/// The 403 a refused crawler gets.
+pub(crate) fn crawler_refused() -> axum::response::Response {
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        REFUSED_AGENT_BODY,
     )
         .into_response()
 }
@@ -981,6 +1047,11 @@ pub(crate) const BEACON_ENDPOINT: &str = "https://cloudflareinsights.com";
 /// HSTS names subdomains because every host under the apex is served over
 /// TLS by the same edge; it is sent from the origin rather than left to a
 /// zone setting nobody can see from the repository.
+///
+/// `X-Robots-Tag: noai, noimageai` is the header spelling of the landing
+/// pages' meta, for what has no `<head>` to carry one: images, the API's
+/// JSON, the installers. It says no page or file here may train or feed an
+/// AI (terms, "Automated access"); it does not stop a search engine indexing.
 pub(crate) async fn transport_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -1000,6 +1071,10 @@ pub(crate) async fn transport_headers(
     headers.insert(
         axum::http::HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("x-robots-tag"),
+        HeaderValue::from_static("noai, noimageai"),
     );
     headers
         .entry(header::REFERRER_POLICY)
@@ -1755,6 +1830,77 @@ mod tests {
             !needs_unsafe_eval("Chrome/97.0.0.0"),
             "97 is the first version that knows the word"
         );
+    }
+
+    /// The crawlers on the list are found whatever their case and wherever
+    /// in the agent; browsers, the app's engines, search engines and an
+    /// editor whose agent carries a name too broad to look for are not.
+    #[test]
+    fn the_ai_crawlers_are_named_and_people_are_not() {
+        for crawler in [
+            "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)",
+            "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)",
+            "CCBot/2.0 (https://commoncrawl.org/faq/)",
+            "mozilla/5.0 (compatible; bytespider; spider-feedback@bytedance.com)",
+            "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)",
+            "Scrapy/2.13.3 (+https://scrapy.org)",
+            "anthropic-ai",
+        ] {
+            assert!(super::refused_agent(crawler), "{crawler}");
+        }
+        for person in [
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.52 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.0.0 Mobile Safari/537.36",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.104.0 Chrome/138.0.0.0 Electron/37.3.1 Safari/537.36",
+            "",
+        ] {
+            assert!(!super::refused_agent(person), "{person}");
+        }
+    }
+
+    /// The check guards the API and the console on any host, and every path
+    /// on the console host, but never a `robots.txt` or the landing's files.
+    #[test]
+    fn the_crawler_check_guards_the_api_and_the_console_only() {
+        use super::{guarded_from_crawlers, HostTier};
+        let page = Answer::Landing("pricing/index.html".to_owned());
+        let robots = Answer::Landing("robots.txt".to_owned());
+        let installer = Answer::Downloads("Teachouse.msi".to_owned());
+        for tier in [HostTier::Landing, HostTier::Other] {
+            assert!(guarded_from_crawlers(tier, "/v1/plans", &Answer::Api));
+            assert!(guarded_from_crawlers(tier, "/catalogue", &Answer::Console));
+            assert!(!guarded_from_crawlers(tier, "/pricing", &page));
+            assert!(!guarded_from_crawlers(tier, "/robots.txt", &robots));
+            assert!(!guarded_from_crawlers(
+                tier,
+                "/downloads/Teachouse.msi",
+                &installer
+            ));
+        }
+        assert!(guarded_from_crawlers(HostTier::Console, "/pricing", &page));
+        assert!(!guarded_from_crawlers(
+            HostTier::Console,
+            "/robots.txt",
+            &robots
+        ));
+    }
+
+    /// The console host's file names every AI crawler in one group and then
+    /// refuses everyone.
+    #[test]
+    fn the_console_robots_names_each_ai_crawler_then_refuses_all() {
+        let robots = super::CONSOLE_ROBOTS.as_str();
+        for name in tam_api::crawlers::AI_CRAWLERS {
+            assert!(
+                robots.contains(&format!("User-agent: {name}\n")),
+                "{name} is named"
+            );
+        }
+        assert!(robots.ends_with("Disallow: /\n\nUser-agent: *\nDisallow: /\n"));
     }
 
     /// While maintenance is on, every page is the maintenance page except the

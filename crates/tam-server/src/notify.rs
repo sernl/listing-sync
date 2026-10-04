@@ -639,17 +639,18 @@ pub(crate) fn compose_refund(
 pub(crate) const SIGNUP_PATH: &str = "/signup";
 
 /// The goodbye a seller gets when they delete their own account, in the
-/// founder's voice, sent before the identity service forgets the address.
+/// founder's voice, sent once the deletion has committed.
 ///
-/// It says what went and what stayed, the way the console's danger zone
-/// said it before they pressed the button, and gives them one way to say "this
-/// was not me": a reply. Nothing about the account itself is in it, because
-/// by the time it lands there is no account. `name` is the recipient's own,
-/// where the identity service held one. The palette is the refund mail's.
+/// It thanks them, names what went and the little that stays, says their
+/// marketplace listings are untouched, and leaves the door open: the one
+/// button is signing up again, and a reply is the way to say "this was not
+/// me". Nothing about the account itself is in it, because by the time it
+/// lands there is no account. `first_name` is the recipient's own, where the
+/// identity service held a name. The palette is the refund mail's.
 #[must_use]
-pub(crate) fn compose_goodbye(name: Option<&str>, console_url: &str) -> Mail {
+pub(crate) fn compose_goodbye(first_name: Option<&str>, console_url: &str) -> Mail {
     let href = format!("{}{SIGNUP_PATH}", console_url.trim_end_matches('/'));
-    let greeting = match name.map(str::trim).filter(|name| !name.is_empty()) {
+    let greeting = match first_name.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => format!("Kia ora {},", escaped(name)),
         None => "Kia ora,".to_owned(),
     };
@@ -659,21 +660,29 @@ pub(crate) fn compose_goodbye(name: Option<&str>, console_url: &str) -> Mail {
            <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
              padding:28px 32px;color:#17231c\">\
            <p style=\"margin:0 0 16px;font-size:16px\">{greeting}</p>\
-           <p style=\"margin:0 0 16px;font-size:16px\">Your Teachouse account is deleted, \
-             along with your catalogue and your device registrations. If you had a plan, \
-             it's cancelled and you won't be charged again.</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">Thank you for teaching with us. \
+             It meant a lot to have you here.</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">Everything tied to your account is \
+             now deleted: your account and sign-in, your catalogue, your shop connections \
+             and your devices. If you had a plan, it's cancelled and you won't be charged \
+             again.</p>\
+           <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">We keep only what the \
+             law or our privacy policy asks of us, such as the terms you agreed to, a note \
+             that the account was deleted, and billing records for tax.</p>\
            <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">Your listings on TPT \
-             and Tes stay as they are, and the files on your devices are untouched.</p>\
-           <p style=\"margin:0 0 24px;font-size:15px;color:#5a6560\">Thank you for teaching \
-             with us. If you didn't ask for this, reply to this email straight away.</p>\
+             and Tes are untouched, and so are the files on your devices.</p>\
+           <p style=\"margin:0 0 24px;font-size:16px\">You're welcome back any time. \
+             Good luck with your teaching and your shop; I hope this term is a kind one.</p>\
            <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
              text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
-             Start again any time</a>\
+             Sign up again</a>\
+           <p style=\"margin:24px 0 0;font-size:14px;color:#5a6560\">If you didn't ask for \
+             this, reply to this email straight away.</p>\
            </div></div>",
         href = escaped(&href),
     );
     Mail {
-        subject: "Your Teachouse account is deleted".to_owned(),
+        subject: "Goodbye from Teachouse".to_owned(),
         html,
         href,
         reply_to: None,
@@ -1807,12 +1816,12 @@ mod tests {
         }
     }
 
-    /// The goodbye says what went and what stayed, greets by an escaped
-    /// name, and its one button is signing up again.
+    /// The goodbye thanks them, says what went and what stayed, greets by an
+    /// escaped first name, and its one button is signing up again.
     #[test]
     fn the_goodbye_mail_says_what_went_and_what_stayed() {
         let mail = super::compose_goodbye(Some("Aroha <b>"), "https://dash.example.test/");
-        assert_eq!(mail.subject, "Your Teachouse account is deleted");
+        assert_eq!(mail.subject, "Goodbye from Teachouse");
         assert_eq!(mail.href, "https://dash.example.test/signup");
         assert!(
             mail.html.contains("Kia ora Aroha &lt;b&gt;,"),
@@ -1820,11 +1829,16 @@ mod tests {
             mail.html
         );
         for said in [
-            "Your Teachouse account is deleted",
-            "your catalogue and your device registrations",
+            "Thank you for teaching with us",
+            "Everything tied to your account is now deleted",
+            "your catalogue, your shop connections and your devices",
             "won't be charged again",
-            "Your listings on TPT and Tes stay as they are",
-            "the files on your devices are untouched",
+            "the terms you agreed to",
+            "Your listings on TPT and Tes are untouched",
+            "the files on your devices",
+            "welcome back any time",
+            "Good luck",
+            "Sign up again",
             "reply to this email",
         ] {
             assert!(mail.html.contains(said), "missing {said:?}");
@@ -1832,5 +1846,7 @@ mod tests {
         assert!(mail.reply_to.is_none());
         let anonymous = super::compose_goodbye(None, "https://dash.example.test");
         assert!(anonymous.html.contains("Kia ora,"));
+        let blank = super::compose_goodbye(Some("  "), "https://dash.example.test");
+        assert!(blank.html.contains("Kia ora,"));
     }
 }

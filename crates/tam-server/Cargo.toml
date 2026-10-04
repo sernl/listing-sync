@@ -5,6 +5,10 @@ edition = "2021"
 publish = false
 
 [dependencies]
+# The crawler check: every name on `tam_api::crawlers`' list looked for in a
+# `User-Agent` in one case-insensitive pass. Already in the lock through
+# `regex` in sibling crates, so this edge adds a name and no package.
+aho-corasick = "1"
 axum = "0.8"
 # The console's policy carries a hash per inline script, so the shell it serves
 # actually boots; both are the versions the rest of the workspace pins.

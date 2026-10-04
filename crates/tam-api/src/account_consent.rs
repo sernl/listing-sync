@@ -40,12 +40,12 @@ use crate::{AppState, OperatorContext, OrgContext};
 /// effective date, so the page a person reads and the version their agreement
 /// records cannot disagree. Moving it is part of changing the terms, and makes
 /// every signed-in person agree again on their next visit.
-pub const TERMS_VERSION: &str = "2026-10-04";
+pub const TERMS_VERSION: &str = "2026-10-05";
 
 /// The Privacy Policy's last substantive change, printed on its page. The
 /// sign-up's first box covers both documents and records [`TERMS_VERSION`];
 /// a privacy change that should ask everyone again moves that date too.
-pub const PRIVACY_VERSION: &str = "2026-10-02";
+pub const PRIVACY_VERSION: &str = "2026-10-05";
 
 /// The sentence every refusal of an unticked box answers with, matching the
 /// identity service's own.
