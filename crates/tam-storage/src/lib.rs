@@ -98,7 +98,9 @@ pub use entitlement::{
     MonthlyCharge, MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant,
     StorefrontAllowance, Usage,
 };
-pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
+pub use erasure::{
+    DeletionRecord, Erased, ErasureRefusal, ErasureRepo, HeldSubscription, Standing,
+};
 pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
     candidates_in, digest_frequency_in, digests_for_in, metadata_for_in, products_by_digest_in,

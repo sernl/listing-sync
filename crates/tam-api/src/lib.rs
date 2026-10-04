@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod account;
 pub mod admin;
 pub mod analytics;
 pub mod auth;
@@ -146,6 +147,10 @@ pub struct Config {
     pub broker_advertise: Option<String>,
     /// How long the broker waits for a device.
     pub broker_timeouts: broker::Timeouts,
+    /// The identity service and the relay a seller's own account deletion
+    /// goes through ([`account`]). Absent, `DELETE /v1/account` answers 503
+    /// and deletes nothing.
+    pub offboarding: Option<account::OffboardingPort>,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -302,6 +307,7 @@ pub fn router(state: AppState) -> Router {
             post(session::exchange).delete(session::logout),
         )
         .route("/{version}/org", get(org::org_view).patch(org::update_org))
+        .route("/{version}/account", delete(account::delete_own_account))
         .route("/{version}/org/slug/{slug}", get(org::slug_availability))
         .route("/{version}/billing", get(billing::billing_view))
         // Both open Stripe and answer a URL rather than redirecting, because

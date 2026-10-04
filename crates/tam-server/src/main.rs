@@ -21,6 +21,7 @@ mod campaigns;
 mod downloads;
 mod exchange_rates;
 mod notify;
+mod offboarding;
 mod refund_mail;
 mod serving;
 
@@ -587,6 +588,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tam_api::telemetry::ProjectKey::new(key.clone()),
         ),
         None => tam_api::telemetry::Telemetry::disabled(),
+    };
+    // A seller's own account deletion needs the identity service's internal
+    // routes and the relay for the goodbye, which are the mail set's; without
+    // it `DELETE /v1/account` answers 503 and deletes nothing.
+    invocation.config.offboarding = if let Some(mail) = &invocation.mail {
+        Some(tam_api::account::OffboardingPort(std::sync::Arc::new(
+            offboarding::AuthOffboarding::new(
+                &mail.auth_internal_url,
+                &mail.auth_internal_secret,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                &mail.console_url,
+            )?,
+        )))
+    } else {
+        eprintln!(
+            "tam-server cannot delete a seller's own account ({RESEND_API_KEY_FLAG} unset); \
+             DELETE /v1/account answers 503"
+        );
+        None
     };
     let state = AppState {
         exchange_rates: Some(std::sync::Arc::new(exchange_rates::EcbRates::new()?)),

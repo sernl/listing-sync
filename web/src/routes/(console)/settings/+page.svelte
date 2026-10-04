@@ -46,6 +46,7 @@
 	import { toast } from '$lib/toast';
 	import { NOT_REMOVED, avatarRefusal, pictureRefusal } from '$lib/pages/account/avatar';
 	import Preferences from '$lib/pages/account/Preferences.svelte';
+	import DeleteAccount from '$lib/pages/account/DeleteAccount.svelte';
 	import Machines from '$lib/pages/account/Machines.svelte';
 	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
 	import { historyLines, permissionRows, withdrawPrompt } from '$lib/pages/account/permissions';
@@ -923,4 +924,6 @@
 	{/if}
 
 	<Preferences />
+
+	<DeleteAccount slug={organisation.data?.slug ?? null} {queryClient} />
 </div>

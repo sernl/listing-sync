@@ -2790,6 +2790,20 @@ export function upload(
 	});
 }
 
+/** `DELETE /v1/account`'s body: the typed confirmation (the account's name or
+ *  `DELETE`), the password where the account has one, and an optional reason. */
+export interface DeleteAccountBody {
+	confirm: string;
+	password?: string;
+	reason?: string;
+}
+
+/** What `DELETE /v1/account` did. */
+export interface AccountDeletedView {
+	subscription_cancelled: boolean;
+	goodbye_sent: boolean;
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -2812,6 +2826,16 @@ export const api = {
 	 *  reserved slug answers 422 rather than `available: false`. */
 	slugAvailability: (slug: string) =>
 		request<SlugAvailability>(`/v1/org/slug/${encodeURIComponent(slug)}`),
+
+	/** The seller deletes their own account: the plan at Stripe, the sign-in
+	 *  and the organisation. Refusals carry a `refusal` detail
+	 *  (`$lib/pages/account/delete-account.ts` words them). */
+	deleteAccount: (body: DeleteAccountBody) =>
+		request<AccountDeletedView>('/v1/account', {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
 
 	/** One keyset page of the catalogue, optionally narrowed to the items
 	 *  carrying one label. The label narrows the query rather than the page, so

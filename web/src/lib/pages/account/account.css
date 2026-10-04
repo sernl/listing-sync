@@ -262,3 +262,30 @@
 		align-items: stretch;
 	}
 }
+
+/* The danger zone at the foot of Account settings: the warning palette,
+   because deleting the account is the one action on the page that cannot be
+   taken back. */
+.acct-danger {
+	display: grid;
+	gap: var(--s-3);
+	padding: var(--s-4);
+	border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+	border-radius: var(--r-field);
+	background: var(--warn-soft);
+	color: var(--warn-ink);
+}
+
+.acct-danger p {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.acct-danger-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-3);
+}

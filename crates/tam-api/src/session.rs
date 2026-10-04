@@ -199,7 +199,7 @@ pub struct ExchangeBody {
     pub token: String,
 }
 
-fn cookie_header(token_hex: &str, max_age_seconds: i64) -> String {
+pub(crate) fn cookie_header(token_hex: &str, max_age_seconds: i64) -> String {
     format!(
         "{SESSION_COOKIE}={token_hex}; Path=/; HttpOnly; SameSite=Lax; Secure; \
          Max-Age={max_age_seconds}"

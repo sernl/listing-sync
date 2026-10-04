@@ -48,6 +48,12 @@ const steps = [
 ---
 
 <Base title={title} description={description} structuredData={structuredData}>
+	{/* Where a seller lands after deleting their own account from the console's
+	    Account settings (`/?deleted=1`). Hidden for everyone else; the script
+	    at the foot of this page shows it. */}
+	<p class="goodbye" id="goodbye" role="status" hidden>
+		<span class="wrap">Your Teachouse account is deleted. Thank you for teaching with us, and you&rsquo;re welcome back any time.</span>
+	</p>
 	<section class="hero">
 		<div class="wrap hero-grid">
 			<div>
@@ -360,4 +366,9 @@ const steps = [
 	<Pricing />
 	<Testimonials />
 	<Faq />
+	<script>
+		if (new URLSearchParams(window.location.search).get('deleted') === '1') {
+			document.getElementById('goodbye')?.removeAttribute('hidden');
+		}
+	</script>
 </Base>

@@ -135,6 +135,37 @@ impl BillingRepo {
         Ok(updated == 1)
     }
 
+    /// Records the status Stripe answered when the seller's own account
+    /// deletion cancelled the subscription outright, answering whether a row
+    /// matched.
+    ///
+    /// Not an event, for the reason [`Self::set_cancel_at_period_end`] is
+    /// not: Stripe answered synchronously, and the webhook that follows
+    /// restates it. Written so the erasure that follows reads the
+    /// subscription as ended, which is what it now is.
+    pub async fn record_status(
+        &self,
+        org: OrgId,
+        subscription: &str,
+        status: &str,
+        now: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let updated = sqlx::query!(
+            "UPDATE billing_subscription SET status = $3, updated_at = $4 WHERE org_id = $1 AND provider_subscription_id = $2",
+            uuid_to_db(org.0),
+            subscription,
+            status,
+            timestamp_to_db(now)?,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(updated == 1)
+    }
+
     /// This organisation's subscription state, or `None` where it has never
     /// had one. `None` is the honest answer for a tenant that never reached
     /// checkout, and is distinct from a cancelled subscription, which is a

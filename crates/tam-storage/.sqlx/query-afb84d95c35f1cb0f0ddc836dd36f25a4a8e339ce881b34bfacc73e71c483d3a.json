@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_deletion (subject, email_hash, org_id, requested_at, stripe_subscription_id, reason) VALUES ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "afb84d95c35f1cb0f0ddc836dd36f25a4a8e339ce881b34bfacc73e71c483d3a"
+}

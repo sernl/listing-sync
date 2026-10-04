@@ -339,7 +339,7 @@ fn relay_verdict(status: reqwest::StatusCode) -> Result<(), RelayError> {
     )))
 }
 
-fn http_client() -> Result<reqwest::Client, reqwest::Error> {
+pub(crate) fn http_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .timeout(core::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .connect_timeout(core::time::Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
@@ -629,6 +629,51 @@ pub(crate) fn compose_refund(
     );
     Mail {
         subject: format!("We've refunded {amount}"),
+        html,
+        href,
+        reply_to: None,
+    }
+}
+
+/// Where the goodbye mail's button goes: signing up again.
+pub(crate) const SIGNUP_PATH: &str = "/signup";
+
+/// The goodbye a seller gets when they delete their own account, in the
+/// founder's voice, sent before the identity service forgets the address.
+///
+/// It says what went and what stayed, the way the console's danger zone
+/// said it before they pressed the button, and gives them one way to say "this
+/// was not me": a reply. Nothing about the account itself is in it, because
+/// by the time it lands there is no account. `name` is the recipient's own,
+/// where the identity service held one. The palette is the refund mail's.
+#[must_use]
+pub(crate) fn compose_goodbye(name: Option<&str>, console_url: &str) -> Mail {
+    let href = format!("{}{SIGNUP_PATH}", console_url.trim_end_matches('/'));
+    let greeting = match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Kia ora {},", escaped(name)),
+        None => "Kia ora,".to_owned(),
+    };
+    let html = format!(
+        "<div style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;\
+           background:#f6f4f1;padding:32px 16px\">\
+           <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
+             padding:28px 32px;color:#17231c\">\
+           <p style=\"margin:0 0 16px;font-size:16px\">{greeting}</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">Your Teachouse account is deleted, \
+             along with your catalogue and your device registrations. If you had a plan, \
+             it's cancelled and you won't be charged again.</p>\
+           <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">Your listings on TPT \
+             and Tes stay as they are, and the files on your devices are untouched.</p>\
+           <p style=\"margin:0 0 24px;font-size:15px;color:#5a6560\">Thank you for teaching \
+             with us. If you didn't ask for this, reply to this email straight away.</p>\
+           <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
+             text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
+             Start again any time</a>\
+           </div></div>",
+        href = escaped(&href),
+    );
+    Mail {
+        subject: "Your Teachouse account is deleted".to_owned(),
         html,
         href,
         reply_to: None,
@@ -1760,5 +1805,32 @@ mod tests {
                 "a refusal moves on to the next operator; a fault stops the pass"
             );
         }
+    }
+
+    /// The goodbye says what went and what stayed, greets by an escaped
+    /// name, and its one button is signing up again.
+    #[test]
+    fn the_goodbye_mail_says_what_went_and_what_stayed() {
+        let mail = super::compose_goodbye(Some("Aroha <b>"), "https://dash.example.test/");
+        assert_eq!(mail.subject, "Your Teachouse account is deleted");
+        assert_eq!(mail.href, "https://dash.example.test/signup");
+        assert!(
+            mail.html.contains("Kia ora Aroha &lt;b&gt;,"),
+            "{}",
+            mail.html
+        );
+        for said in [
+            "Your Teachouse account is deleted",
+            "your catalogue and your device registrations",
+            "won't be charged again",
+            "Your listings on TPT and Tes stay as they are",
+            "the files on your devices are untouched",
+            "reply to this email",
+        ] {
+            assert!(mail.html.contains(said), "missing {said:?}");
+        }
+        assert!(mail.reply_to.is_none());
+        let anonymous = super::compose_goodbye(None, "https://dash.example.test");
+        assert!(anonymous.html.contains("Kia ora,"));
     }
 }

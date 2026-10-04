@@ -97,7 +97,7 @@ const CONSOLE_RETURN_PATH: &str = "/settings/billing";
 /// The Stripe statuses after which a subscription can neither renew nor be
 /// kept: it is over, and the page says when it ended rather than offering to
 /// cancel it.
-const ENDED: [&str; 2] = ["canceled", "incomplete_expired"];
+pub(crate) const ENDED: [&str; 2] = ["canceled", "incomplete_expired"];
 
 // -------------------------------------------------------------------- views
 

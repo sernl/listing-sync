@@ -47,7 +47,7 @@ export function authClient(): ReturnType<typeof createClient> {
  * the fields this client reads. */
 interface SessionRead {
 	user: { id?: string; name: string; email: string; emailVerified: boolean };
-	session: { impersonatedBy?: string | null };
+	session: { impersonatedBy?: string | null; createdAt: Date | null };
 }
 
 /** The identity session, read without better-auth's client: one same-origin
@@ -92,8 +92,43 @@ async function readSession(): Promise<SessionRead | null> {
 			emailVerified: user.emailVerified === true
 		},
 		session: {
-			impersonatedBy: typeof session.impersonatedBy === 'string' ? session.impersonatedBy : null
+			impersonatedBy: typeof session.impersonatedBy === 'string' ? session.impersonatedBy : null,
+			createdAt: signedInAt(session.createdAt)
 		}
+	};
+}
+
+/** better-auth's `createdAt` as the wire carries it (an ISO string), or null
+ *  where it is missing or unreadable. */
+function signedInAt(value: unknown): Date | null {
+	if (typeof value !== 'string' && !(value instanceof Date)) {
+		return null;
+	}
+	const at = new Date(value);
+	return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** What the identity service will ask of a seller deleting their account:
+ *  the password where the account has one, otherwise a sign-in from the last
+ *  few minutes. `signedInAt` is when this browser signed in, or null. */
+export interface DeletionProof {
+	hasPassword: boolean;
+	signedInAt: Date | null;
+}
+
+/** Reads both facts. better-auth's `/list-accounts` names the
+ *  email-and-password sign-in `credential`. */
+export async function deletionProof(): Promise<DeletionProof> {
+	const [session, accounts] = await Promise.all([
+		readSession(),
+		(await authClient()).listAccounts()
+	]);
+	if (accounts.error) {
+		throw refused(accounts.error, 'We could not check how you sign in.');
+	}
+	return {
+		hasPassword: (accounts.data ?? []).some((account) => account.providerId === 'credential'),
+		signedInAt: session?.session.createdAt ?? null
 	};
 }
 

@@ -34,9 +34,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tam_limits::Plan;
 use tam_storage::{
-    BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, ErasureRepo, Grant, GrantRecord,
-    GrantedBy, IdentityAuditRepo, ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo,
-    SessionRepo, SignupsRepo, UserCursor,
+    BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, Grant, GrantRecord, GrantedBy,
+    IdentityAuditRepo, ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo, SessionRepo,
+    SignupsRepo, UserCursor,
 };
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
@@ -894,11 +894,7 @@ pub(crate) async fn delete_user(
     Path((_version, subject)): Path<(String, String)>,
 ) -> Result<Json<DeletedUserView>, APIError> {
     let subject = parse_id(&subject)?;
-    let outcome = ErasureRepo::new(state.pool.clone())
-        .erase_account(subject)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?;
-    match outcome {
+    match crate::account::erase(&state, subject, None).await? {
         Ok(erased) => {
             eprintln!(
                 "tam-api: operator {} deleted user {} and organisation {} ({} rows)",
