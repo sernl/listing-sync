@@ -25,6 +25,7 @@
 pub mod account;
 pub mod account_consent;
 pub mod admin;
+pub mod admin_analytics;
 pub mod analytics;
 pub mod auth;
 pub mod billing;
@@ -158,6 +159,10 @@ pub struct Config {
     /// goes through ([`account`]). Absent, `DELETE /v1/account` answers 503
     /// and deletes nothing.
     pub offboarding: Option<account::OffboardingPort>,
+    /// The PostHog query reader behind the operators' site analytics page.
+    /// Absent means this deployment holds no personal API key or project
+    /// id, and that route answers 503 rather than an empty page.
+    pub site_analytics: Option<admin_analytics::SiteAnalytics>,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -1029,6 +1034,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/site",
             get(site::admin_site_view).patch(site::update_site),
+        )
+        // Landing-site analytics, read from PostHog's query API with a
+        // personal key; no database is touched (`admin_analytics`).
+        .route(
+            "/{version}/admin/analytics/site",
+            get(admin_analytics::site),
         )
         // The operators' mail to sellers (`mail_campaigns`), and the two
         // public routes every such mail links to: its pictures, which a mail

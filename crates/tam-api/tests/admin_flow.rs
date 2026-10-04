@@ -65,7 +65,7 @@ const ADMIN_PATHS: [&str; 11] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 34] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 35] = [
     "/{version}/admin/marketplace-requests",
     // Pricing and the site switches read the application pool, like the
     // guides below, so they serve with no backoffice database; their
@@ -125,6 +125,10 @@ const ADMIN_PATHS_UNCOVERED: [&str; 34] = [
     "/{version}/admin/payments/charges/{charge}/refunds",
     "/{version}/admin/payments/refunds/{id}/mail",
     "/{version}/admin/payments/settings",
+    // Site analytics: no database at all, only PostHog's query API, so it
+    // serves with no backoffice pool. Its refusal for a seller and an
+    // anonymous caller is asserted in `admin_analytics_flow`.
+    "/{version}/admin/analytics/site",
 ];
 
 #[expect(

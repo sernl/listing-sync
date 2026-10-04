@@ -1,0 +1,93 @@
+/* The admin Site analytics page, on top of `flow.css`, `admin.css` and
+ * `data.css`: the "as of" line, the visitors-per-day line, and the long
+ * names a breakdown table carries. Tokens only.
+ *
+ * Mobile first: below 620px the figures sit two across (`op-stats`), the
+ * paired tables stack (`flow-cols` wraps at 280px) and every table turns into
+ * cards (`data-table.stack`). */
+
+.sa-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.sa-quiet {
+	margin: 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+/* A path or a referring site can be long and has no spaces to break at. */
+.data-table td.sa-name {
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+/* --- the visitors line ---------------------------------------------------- */
+
+.sa-line-box {
+	min-width: 0;
+	width: 100%;
+	min-height: 220px;
+}
+
+.sa-line {
+	display: block;
+	overflow: visible;
+}
+
+.sa-line .sa-grid {
+	stroke: var(--line);
+	stroke-width: 1;
+}
+
+.sa-line .sa-tick,
+.sa-line .sa-day {
+	font-family: var(--sans);
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
+	fill: var(--muted);
+}
+
+.sa-line .sa-area {
+	fill: var(--accent-soft);
+	stroke: none;
+}
+
+.sa-line .sa-stroke {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+.sa-line .sa-dot {
+	fill: var(--card);
+	stroke: var(--accent);
+	stroke-width: 2;
+}
+
+/* Ninety days draw no dots, but each day still answers a hover. */
+.sa-line .sa-hit {
+	fill: transparent;
+}
+
+.sa-line circle:hover {
+	fill: var(--accent);
+}
+
+@media (max-width: 620px) {
+	.sa-page .segmented {
+		width: 100%;
+	}
+
+	.sa-page .segmented button {
+		flex: 1 1 0;
+		padding-inline: var(--s-2);
+	}
+}

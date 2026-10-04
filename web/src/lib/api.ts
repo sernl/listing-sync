@@ -58,6 +58,7 @@ import type {
 	RefundView,
 	SyncView
 } from '$lib/pages/admin/payments';
+import type { SiteAnalyticsView, SiteRange } from '$lib/pages/admin/site-analytics';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 import type { ToastNotice } from '$lib/toast';
 import type { ConsentBody } from '$lib/legal';
@@ -3523,6 +3524,10 @@ export const api = {
 	/** The Stripe payment ledger: charges, refunds, chargebacks, invoices and
 	 *  subscriptions, newest first. */
 	adminPayments: () => request<PaymentsAdminView>('/v1/admin/payments'),
+	/** The public site's visitors from PostHog over one range. 503 when the
+	 *  server has no PostHog personal key; 502 when PostHog did not answer. */
+	adminSiteAnalytics: (range: SiteRange) =>
+		request<SiteAnalyticsView>(`/v1/admin/analytics/site?range=${range}`),
 	/** Reads the last 90 days from Stripe into the ledger. */
 	syncPayments: () => post<SyncView>('/v1/admin/payments/sync', {}),
 	/** Refunds part or all of one charge. 422 with a sentence when the amount

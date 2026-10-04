@@ -215,6 +215,7 @@ export const ADMIN_SECTION: NavSection = {
 	href: '/admin',
 	items: [
 		{ href: '/admin', label: 'Overview', icon: 'layout-dashboard' },
+		{ href: '/admin/analytics', label: 'Site analytics', icon: 'activity' },
 		{ href: '/admin/orgs', label: 'Organisations', icon: 'building-2' },
 		{ href: '/admin/health', label: 'Sync health', icon: 'heart-pulse' },
 		{ href: '/admin/failures', label: 'Failed writes', icon: 'circle-x' },

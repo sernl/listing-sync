@@ -23,7 +23,9 @@ calamine = { workspace = true }
 # from the host's `/usr/share/zoneinfo`.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
-futures-util = { version = "0.3", default-features = false }
+# `alloc` for `StreamExt::buffered`, which runs the site analytics queries
+# three at a time; the feature is already on in the lock through axum.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 hmac = { workspace = true }
 jsonwebtoken = { version = "9.3", default-features = false }
 # The guide renderer, and the same workspace edge `tam-marketplace-tpt`
