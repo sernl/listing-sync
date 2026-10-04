@@ -110,11 +110,14 @@ const TENANT_TABLES: [&str; 77] = [
 /// application pool. payment_event and refund are the operators' payments
 /// ledger (migration 0102): written by the signed Stripe webhook, which holds
 /// no tenant pin, and read only by operator routes; their org_id is a
-/// cross-reference, not a fence. The rest are genuinely global:
-/// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
-/// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 23] = [
+/// cross-reference, not a fence. account_consent is what a person agreed to
+/// at sign-up (migration 0103): keyed on the identity subject, written before
+/// any organisation exists, and owned by no tenant. The rest are genuinely
+/// global: reference data, the canonical taxonomy, the fleet kill switch, and
+/// sqlx's migration bookkeeping.
+const GLOBAL_TABLES: [&str; 24] = [
     "_sqlx_migrations",
+    "account_consent",
     "app_user",
     "canonical_term",
     "discount",

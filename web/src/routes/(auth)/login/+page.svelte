@@ -11,10 +11,12 @@
 		signInWithPassword,
 		signInWithProvider
 	} from '$lib/auth-client';
+	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { MARKETING_URL } from '$lib/site';
+	import { socialConsentError } from '$lib/legal';
 	import { external } from '$lib/external';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
@@ -52,6 +54,10 @@
 	let captchaToken = $state<string | null>(null);
 	let captcha = $state<ReturnType<typeof Turnstile> | null>(null);
 	const challengePending = $derived(captchaPending(TURNSTILE_SITE_KEY, captchaToken));
+	/** Why a provider sign-in came back here rather than signed in: most
+	 *  often an account that does not exist yet, which only the sign-up page,
+	 *  with its two boxes, can make. */
+	const returnedRefusal = $derived(socialConsentError(page.url.searchParams.get('error')));
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {
@@ -203,6 +209,12 @@
 	{:else}
 		<h1>Sign in</h1>
 		<p>{busy === 'resume' ? 'Signing you in…' : SIGN_IN_PROMPT}</p>
+
+		{#if returnedRefusal !== null}
+			<div id="login-refusal" class="auth-refusal">
+				<Banner tone="bad">{returnedRefusal}</Banner>
+			</div>
+		{/if}
 
 		<form onsubmit={withPassword} class="form">
 			<Field label="Email" id="email" required>

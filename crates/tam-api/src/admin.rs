@@ -90,7 +90,7 @@ fn missing(what: &str) -> APIError {
     )
 }
 
-fn parse_id(raw: &str) -> Result<Uuid, APIError> {
+pub(crate) fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|parsed| Uuid(*parsed.as_bytes()))
         .map_err(|_| {

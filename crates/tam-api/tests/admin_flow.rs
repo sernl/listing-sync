@@ -38,7 +38,7 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 9] = [
+const ADMIN_PATHS: [&str; 11] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -48,6 +48,8 @@ const ADMIN_PATHS: [&str; 9] = [
     "/v1/admin/dead-letters",
     "/v1/admin/impersonations",
     "/v1/admin/users",
+    "/v1/admin/consents",
+    "/v1/admin/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/consent",
 ];
 
 /// The mounted operator route `ADMIN_PATHS` does not carry, named rather than

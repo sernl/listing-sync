@@ -98,4 +98,9 @@ server.listen(env.port, env.bind, () => {
   if (env.internalSecret !== undefined) {
     console.log(`tam-auth answering ${ADDRESS_PATH}{subject} to a caller holding the shared secret`);
   }
+  if (env.consentUrl === undefined || env.internalSecret === undefined) {
+    console.error(
+      'tam-auth: TAM_AUTH_CONSENT_URL or TAM_AUTH_INTERNAL_SECRET is unset, so no sign-up agreement can be recorded and every sign-up will be refused',
+    );
+  }
 });

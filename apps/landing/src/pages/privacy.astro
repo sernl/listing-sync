@@ -1,10 +1,18 @@
 ---
 import Base from '../layouts/Base.astro';
+import { PRIVACY_VERSION } from '../legal.generated.js';
 import { supportEmail } from '../site.js';
 
-/* The date the text below last changed in substance. Moving it is part of
-   changing the policy, and section 14 says how a change is announced. */
-const updated = '2 October 2026';
+/* The date the text below last changed in substance: PRIVACY_VERSION, which
+   tam-typegen emits from the server's constant beside the terms version.
+   Moving it is part of changing the policy (crates/tam-api/src/account_consent.rs),
+   and section 14 says how a change is announced. */
+const updated = new Date(`${PRIVACY_VERSION}T00:00:00Z`).toLocaleDateString('en-NZ', {
+	day: 'numeric',
+	month: 'long',
+	year: 'numeric',
+	timeZone: 'UTC'
+});
 ---
 
 <Base

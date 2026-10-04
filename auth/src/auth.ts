@@ -1,11 +1,20 @@
 import { passkey } from '@better-auth/passkey';
 import { type BetterAuthOptions, betterAuth } from 'better-auth';
-import { createAuthMiddleware, getIP, getSessionFromCtx, isAPIError } from 'better-auth/api';
+import {
+  addOAuthServerContext,
+  createAuthMiddleware,
+  getIP,
+  getOAuthState,
+  getSessionFromCtx,
+  isAPIError,
+} from 'better-auth/api';
+import { deleteSessionCookie } from 'better-auth/cookies';
 import { admin, captcha, haveIBeenPwned, jwt, openAPI } from 'better-auth/plugins';
 import { PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { type AuthEvent, record } from './audit.ts';
 import { ipAddress } from './client-ip.ts';
+import { consentHooks, consentUnavailable, PendingConsents, parseConsent } from './consent.ts';
 import { deliver } from './email.ts';
 import { env } from './env.ts';
 import { vouchedByProvider } from './provider-profile.ts';
@@ -17,15 +26,46 @@ const dialect = new PostgresDialect({ pool });
 
 // Both providers map their profile through the same mapper, and the reason is
 // in provider-profile.ts: without it a Microsoft address arrives unverified and
-// the completion mail is never sent to it.
+// the completion mail is never sent to it. Neither creates an account on its
+// own: only the sign-up page's buttons ask to (`requestSignUp`), and they carry
+// the person's agreement with them (consent.ts). A provider sign-in from the
+// sign-in page for an account that does not exist yet comes back with
+// `signup_disabled` rather than an account nobody agreed for.
 const socialProviders = {
   ...(env.google === undefined
     ? {}
-    : { google: { ...env.google, mapProfileToUser: vouchedByProvider } }),
+    : {
+        google: { ...env.google, mapProfileToUser: vouchedByProvider, disableImplicitSignUp: true },
+      }),
   ...(env.microsoft === undefined
     ? {}
-    : { microsoft: { ...env.microsoft, mapProfileToUser: vouchedByProvider } }),
+    : {
+        microsoft: {
+          ...env.microsoft,
+          mapProfileToUser: vouchedByProvider,
+          disableImplicitSignUp: true,
+        },
+      }),
 };
+
+// The sign-up agreement: refused before the account exists when a box is
+// unticked, written to tam-server the moment it does, and the account removed
+// again when that write fails. See consent.ts.
+const consent = consentHooks({
+  sink:
+    env.consentUrl === undefined || env.internalSecret === undefined
+      ? undefined
+      : { url: env.consentUrl, secret: env.internalSecret },
+  pending: new PendingConsents(),
+  // The signed OAuth state, not the client-supplied `additionalData` beside
+  // it: only what the before hook validated rides through the redirect.
+  carry: (agreement) => addOAuthServerContext({ consent: agreement }),
+  carried: async () => parseConsent((await getOAuthState())?.serverContext?.consent),
+  removeUser: async (id) => {
+    const context = await auth.$context;
+    await context.internalAdapter.deleteUser(id);
+  },
+});
 
 const audit = (event: AuthEvent): void => record(pool, event);
 
@@ -232,6 +272,11 @@ export const auth = betterAuth({
   },
   socialProviders,
   hooks: {
+    // A sign-up without both boxes ticked is refused before anything is
+    // written; see consent.ts.
+    before: createAuthMiddleware(async (ctx) => {
+      await consent.before(ctx);
+    }),
     after: createAuthMiddleware(async (ctx) => {
       const where = origin(ctx.headers, ctx.context.options);
       const failed = failureCode(ctx.context.returned);
@@ -253,15 +298,52 @@ export const auth = betterAuth({
       // /sign-in/social, which only hands back the provider's URL. A minted
       // session is the whole condition: account linking runs through the same
       // path and mints none.
+      //
+      // A callback that created the account writes its agreement first. When
+      // that fails the account is already gone again (consent.ts), so the
+      // session cookie the callback set is cleared and the person goes back to
+      // the sign-up page with the reason, rather than into a console with no
+      // account behind it.
       if (ctx.path === '/callback/:id') {
+        if ((await consent.complete(minted?.user.id, where)) === 'failed') {
+          deleteSessionCookie(ctx);
+          const back = (await getOAuthState())?.errorURL ?? '/signup';
+          throw ctx.redirect(
+            `${back}${back.includes('?') ? '&' : '?'}error=consent_unavailable`,
+          );
+        }
         if (minted !== null) {
           audit({ event: 'user_signed_in', ...subject(minted, undefined), ...where });
         }
         return;
       }
 
+      // A provider's id token signs in, and with requestSignUp signs up,
+      // without a redirect, so the agreement is written here instead.
+      if (ctx.path === '/sign-in/social') {
+        if ((await consent.complete(minted?.user.id, where)) === 'failed') {
+          deleteSessionCookie(ctx);
+          throw consentUnavailable();
+        }
+        return;
+      }
+
+      // The account exists by now and nothing else has happened to it, so
+      // this is where its agreement is written, and where a failed write turns
+      // the sign-up into a 503 with the account removed again.
       if (ctx.path === '/sign-up/email') {
         if (failed === undefined) {
+          const created =
+            minted?.user.id ??
+            (ctx.context.returned as { user?: { id?: unknown } } | undefined)?.user?.id;
+          const outcome = await consent.complete(
+            typeof created === 'string' ? created : undefined,
+            where,
+          );
+          if (outcome === 'failed') {
+            deleteSessionCookie(ctx);
+            throw consentUnavailable();
+          }
           audit({ event: 'user_signed_up', ...subject(minted, submitted), ...where });
         }
         return;
@@ -329,6 +411,13 @@ export const auth = betterAuth({
     }),
   },
   databaseHooks: {
+    user: {
+      create: {
+        // A sign-up's account is created only with an agreement, and is given
+        // its id here so the after hook can find that agreement again.
+        before: async (user, context) => consent.createUser(user, context),
+      },
+    },
     session: {
       create: {
         // Impersonation is a session mint and has no other trace: the response

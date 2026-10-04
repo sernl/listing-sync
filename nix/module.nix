@@ -205,6 +205,10 @@ let
   ++ lib.optionals (mailEnabled && cfg.server.mail.marketingFrom != null) [
     "--marketing-email-from"
     cfg.server.mail.marketingFrom
+  ]
+  ++ lib.optionals (cfg.server.consentSecretFile != null) [
+    "--consent-secret-file"
+    cfg.server.consentSecretFile
   ];
 
   # tam-server and tam-worker reach nothing off this machine while their stores
@@ -544,6 +548,23 @@ in
         type = lib.types.port;
         default = 8080;
         description = "TCP port the API and the console are served on behind the edge.";
+      };
+      consentSecretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = cfg.server.mail.authInternalSecretFile;
+        defaultText = lib.literalExpression "config.services.teachouse.server.mail.authInternalSecretFile";
+        example = "/run/safix/teachouse-api/teachouse-internal-secret";
+        description = ''
+          Path to a file holding the shared secret the identity service offers
+          when it records a new account's sign-up agreement at tam-server's
+          `POST /internal/consent`, as a bare value on one line, readable by
+          the `teachouse-api` account. It is the identity service's
+          `TAM_AUTH_INTERNAL_SECRET` (`auth.internalSecretFile`), so it
+          defaults to the file that already carries that value for the mail
+          path. Null leaves the route unmounted, and the identity service then
+          refuses every sign-up: no account is created without its agreement
+          on record.
+        '';
       };
       backoffice = lib.mkOption {
         type = lib.types.bool;
@@ -1029,7 +1050,13 @@ in
     ];
 
     warnings =
-      lib.optional (cfg.server.stripeWebhookSecret != null) ''
+      lib.optional (cfg.server.consentSecretFile == null || cfg.auth.internalSecretFile == null) ''
+        services.teachouse.server.consentSecretFile or
+        services.teachouse.auth.internalSecretFile is null, so the identity
+        service cannot record a sign-up's agreement and refuses every new
+        account. Set both to the same shared secret.
+      ''
+      ++ lib.optional (cfg.server.stripeWebhookSecret != null) ''
         services.teachouse.server.stripeWebhookSecret puts the billing webhook's
         secret in /proc/<pid>/cmdline, where every local account can read it.
         tam-server takes every configuration value as argv and offers no
@@ -1319,6 +1346,19 @@ in
         TAM_AUTH_TRUSTED_ORIGINS = lib.concatStringsSep "," cfg.auth.trustedOrigins;
         TAM_AUTH_PASSKEY_RP_NAME = cfg.auth.passkeyRpName;
         TAM_AUTH_DATABASE_URL = dbUrl "tam_auth";
+        # Where a new account's sign-up agreement is written: tam-server on
+        # this machine, reached on loopback whatever address it listens on.
+        TAM_AUTH_CONSENT_URL = "http://${
+          if
+            lib.elem cfg.server.bindAddress [
+              "0.0.0.0"
+              "::"
+            ]
+          then
+            "127.0.0.1"
+          else
+            cfg.server.bindAddress
+        }:${toString cfg.server.port}/internal/consent";
       }
       // lib.optionalAttrs (cfg.auth.emailFrom != null) {
         TAM_AUTH_EMAIL_FROM = cfg.auth.emailFrom;

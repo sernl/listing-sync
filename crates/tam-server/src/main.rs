@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--landing-host <host> --console-host <host>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--landing-host <host> --console-host <host>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--consent-secret-file <path>] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +26,7 @@ mod serving;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use tam_api::account_consent::InternalSecret;
 use tam_api::devices::EntitlementKey;
 use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
@@ -102,6 +103,14 @@ const STRIPE_PRICE_MAP_FLAG: &str = "--stripe-price-map";
 /// source does not. Absent, the whole facility is inert: every `capture`
 /// call in the API is a no-op and nothing is sent.
 const POSTHOG_KEY_FLAG: &str = "--posthog-key";
+
+/// The shared secret the identity service offers when it records a new
+/// account's sign-up agreement at `POST /internal/consent`: a file holding
+/// the same value as the identity service's `TAM_AUTH_INTERNAL_SECRET`.
+/// Absent, that route answers 404, and the identity service, which fails a
+/// sign-up closed when the record cannot be written, refuses every new
+/// account.
+const CONSENT_SECRET_FLAG: &str = "--consent-secret-file";
 
 /// Which PostHog region ingests. Defaults to the EU host, which is the only
 /// residency correct under every branch of the jurisdiction fork the
@@ -622,6 +631,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             invocation.config.stripe_price_map.len()
         );
     }
+    if invocation.config.consent_secret.is_none() {
+        eprintln!(
+            "tam-server has no consent secret ({CONSENT_SECRET_FLAG}); the identity service \
+             cannot record a sign-up's agreement, so new accounts will be refused"
+        );
+    }
     match &invocation.posthog_key {
         Some(_) => eprintln!(
             "tam-server capturing product analytics to {}",
@@ -863,6 +878,11 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--backoffice-db-url needs a url argument")?,
             );
+        } else if argument == CONSENT_SECRET_FLAG {
+            let path = arguments
+                .next()
+                .ok_or("--consent-secret-file needs a path argument")?;
+            config.consent_secret = Some(InternalSecret::new(read_secret(&path)?));
         } else if argument == STRIPE_WEBHOOK_SECRET_FLAG {
             config.stripe_webhook_secret = Some(WebhookSecret::new(
                 arguments

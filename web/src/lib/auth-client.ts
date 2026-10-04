@@ -11,6 +11,7 @@ import type { Whoami } from '$lib/api';
 import type { CaptchaOptions } from '$lib/captcha';
 import type { BrowserSession } from '$lib/device-merge';
 import type { SocialProvider } from '$lib/social-providers';
+import type { ConsentBody } from '$lib/legal';
 
 /** Where the identity service is reached. Same-origin is a requirement rather
  * than a convenience: better-auth's session cookie has to be first-party
@@ -107,6 +108,10 @@ const SOCIAL_RETURN = '/login';
  * needing the origin listed. */
 const PASSWORD_RESET_RETURN = '/reset/confirm';
 
+/** Where a refused social sign-up returns the browser: the page with the
+ * boxes, so the reason is read where it can be acted on. */
+const SIGN_UP_RETURN = '/signup';
+
 /** What the identity service says about the signed-in human, reduced to the
  * facts this client acts on. */
 export interface Identity {
@@ -202,13 +207,21 @@ export async function signInWithPassword(
 	return (await authClient()).signIn.email({ email, password }, captcha);
 }
 
+/** Make an account. `consent` is the two boxes as the page sent them: better-auth
+ * passes body fields it does not know through to the identity service's hook,
+ * which refuses the sign-up without them and records them the moment the
+ * account exists, removing it again if that write fails. Built as a named
+ * body rather than inline so the extra field is not an excess-property error
+ * against better-auth's own body type. */
 export async function signUpWithPassword(
 	name: string,
 	email: string,
 	password: string,
+	consent: ConsentBody,
 	captcha?: CaptchaOptions
 ) {
-	return (await authClient()).signUp.email({ name, email, password, callbackURL: SOCIAL_RETURN }, captcha);
+	const body = { name, email, password, callbackURL: SOCIAL_RETURN, consent };
+	return (await authClient()).signUp.email(body, captcha);
 }
 
 /**
@@ -228,12 +241,28 @@ export async function resetPassword(token: string, newPassword: string) {
 }
 
 /** Hands the browser to the provider; the redirect is performed by the
- * client's own redirect plugin on the response. */
+ * client's own redirect plugin on the response. Sign-in only: the providers
+ * do not make accounts implicitly, so an unknown account comes back to
+ * `/login` with `?error=signup_disabled`. */
 export async function signInWithProvider(provider: SocialProvider) {
 	return (await authClient()).signIn.social({
 		provider,
 		callbackURL: SOCIAL_RETURN,
 		errorCallbackURL: SOCIAL_RETURN
+	});
+}
+
+/** Makes an account through a provider. The agreement rides better-auth's
+ * signed OAuth state through the provider's redirect and is recorded at the
+ * callback, as the account is made; a refusal comes back to `/signup`,
+ * where the boxes are, with the reason in `?error=`. */
+export async function signUpWithProvider(provider: SocialProvider, consent: ConsentBody) {
+	return (await authClient()).signIn.social({
+		provider,
+		callbackURL: SOCIAL_RETURN,
+		errorCallbackURL: SIGN_UP_RETURN,
+		requestSignUp: true,
+		additionalData: { consent }
 	});
 }
 

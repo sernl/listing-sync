@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod account_consent;
 pub mod analytics;
 pub mod authorship;
 pub mod backoffice;
@@ -55,6 +56,10 @@ pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
 
+pub use account_consent::{
+    AccountConsentKind, AccountConsentRecord, AccountConsentRepo, AccountConsentSummary,
+    NewAccountConsent,
+};
 pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{

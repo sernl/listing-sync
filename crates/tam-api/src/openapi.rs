@@ -23,11 +23,16 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 214] = [
+pub const ROUTES: [Route; 219] = [
     Route {
         method: "get",
         path: "/healthz",
         summary: "Unversioned liveness probe",
+    },
+    Route {
+        method: "post",
+        path: "/internal/consent",
+        summary: "Identity service: record a new account's sign-up agreement (shared secret)",
     },
     Route {
         method: "get",
@@ -218,6 +223,16 @@ pub const ROUTES: [Route; 214] = [
         method: "post",
         path: "/{version}/onboarding/tour",
         summary: "Record that the requesting user completed or skipped the guided tour",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/consent/status",
+        summary: "Whether the requesting user has agreed to the current terms",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/consent",
+        summary: "Record the requesting user's agreement to the current terms",
     },
     Route {
         method: "get",
@@ -873,6 +888,16 @@ pub const ROUTES: [Route; 214] = [
         method: "get",
         path: "/{version}/admin/users",
         summary: "Operator: a page of users with their organisation, its plan and their last sign-in",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/consents",
+        summary: "Operator: every account's newest terms agreement",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/users/{subject}/consent",
+        summary: "Operator: every statement one account agreed to, with time, address and browser",
     },
     Route {
         method: "delete",
