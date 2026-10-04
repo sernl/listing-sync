@@ -124,7 +124,7 @@ async fn unlink(app: &PgPool, org: OrgId) -> ConnectionId {
         .expect("the connection reads");
     tx.commit().await.expect("the read commits");
     let connection = ConnectionId(Uuid(*id.as_bytes()));
-    assert!(ConnectionRepo::new(app.clone())
+    let moved = ConnectionRepo::new(app.clone())
         .unlink(
             org,
             connection,
@@ -134,7 +134,8 @@ async fn unlink(app: &PgPool, org: OrgId) -> ConnectionId {
             },
         )
         .await
-        .expect("the unlink runs"));
+        .expect("the unlink runs");
+    assert!(moved, "the linked connection is unlinked");
     connection
 }
 
