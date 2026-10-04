@@ -385,12 +385,14 @@ web-dev: web-wasm
 # for performance and search, and the marketing page is the one surface where
 # that matters (D28).
 #
-# The landing lane: lockfile install, the static build, then the copy gate
+# The landing lane: lockfile install, the static build, then the copy and
+# spacing gates
 landing-check:
     just landing-style-gate
     cd apps/landing && npm ci --no-audit --no-fund
     cd apps/landing && npm run build
     just landing-copy-gate
+    just landing-spacing-gate
 
 # Prose on this site names no marketplace. Three things do, and they are all
 # deliberate: `availability` in `apps/landing/src/site.js`, which is the one
@@ -506,6 +508,17 @@ landing-copy-gate:
     }
     console.log("landing: " + pages.length + " pages, no marketplace named outside the availability sentence and the marked bands");
     '
+
+# Words that run together: Astro drops a line break between text and a tag or
+# an expression, so `</a>` at a line end followed by `says` builds as
+# "Policysays", and `is` followed by `{amount}` as "is7". The terms shipped two
+# of these. The script reads the built pages for words touching an inline
+# element's tag (`a`, `strong`, `em`, `code`, `span`) and the `.astro` sources
+# for text meeting an expression across a line break, which leaves no tag to
+# find in the build. Like `landing-copy-gate` it needs `npm run build` first and
+# runs in `just landing-check`.
+landing-spacing-gate:
+    cd apps/landing && node scripts/check-spacing.mjs
 
 # One stylesheet draws this whole site, and on 2026-09-06 it declared `.band`
 # twice: the migration table's rule and, forty-two lines later, the marketplace
