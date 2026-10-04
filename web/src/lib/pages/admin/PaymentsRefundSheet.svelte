@@ -71,8 +71,10 @@
 
 	// The draft is built on the first quote; a later quote (after the server
 	// said the first went stale) moves the amount back to the policy's.
+	// `quotedOn` is raw so it keeps the query's identity: a deep proxy would
+	// never equal `quoting.data`, and the effect below would rerun forever.
 	let draft = $state<RefundDraft | null>(null);
-	let quotedOn = $state<QuoteView | null>(null);
+	let quotedOn = $state.raw<QuoteView | null>(null);
 	$effect(() => {
 		const quote = quoting.data;
 		if (quote === undefined || quote === quotedOn) return;
