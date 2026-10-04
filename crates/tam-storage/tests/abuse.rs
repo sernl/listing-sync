@@ -14,9 +14,7 @@ use tam_storage::{
     DeviceRegistration, DeviceRepo, DeviceSessionReport, DeviceSessionStatus, EntitlementRepo,
     FlagKind, SessionRepo, SessionToken, Signal, SignalKind, StorageError,
 };
-use tam_types::{
-    Actor, ConnectionId, Marketplace, OrgId, Stamp, Timestamp, UserId, Uuid,
-};
+use tam_types::{Actor, ConnectionId, Marketplace, OrgId, Stamp, Timestamp, UserId, Uuid};
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
 const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
@@ -193,12 +191,20 @@ async fn erase(app: &PgPool, org: OrgId) {
 async fn one_shops_free_moves_are_granted_once_whichever_account_names_it(app: PgPool) {
     seed_orgs(&app).await;
     let devices = checking_in(&app);
-    for (org, device) in [(ORG_A, "laptop-a"), (ORG_B, "laptop-b"), (ORG_C, "laptop-c")] {
+    for (org, device) in [
+        (ORG_A, "laptop-a"),
+        (ORG_B, "laptop-b"),
+        (ORG_C, "laptop-c"),
+    ] {
         enrol(&devices, org, device).await;
     }
 
     bind(&devices, ORG_A, "laptop-a").await;
-    assert_eq!(balance(&app, ORG_A).await, 5, "the shop's first account is credited");
+    assert_eq!(
+        balance(&app, ORG_A).await,
+        5,
+        "the shop's first account is credited"
+    );
     spend(&app, ORG_A, 0x71).await;
     unlink(&app, ORG_A).await;
 
@@ -242,7 +248,11 @@ async fn an_unlink_soon_after_spending_free_moves_zeroes_the_rest(app: PgPool) {
         .quick_unlink(ORG_A, connection.0, NOW)
         .await
         .expect("the check runs"));
-    assert_eq!(balance(&app, ORG_A).await, 0, "the three left are taken back");
+    assert_eq!(
+        balance(&app, ORG_A).await,
+        0,
+        "the three left are taken back"
+    );
     assert_eq!(open_flags(&app, ORG_A).await, ["quick_unlink"]);
     assert!(
         abuse
@@ -295,12 +305,11 @@ async fn the_scorer_flags_shared_values_once_and_respects_a_dismissal(app: PgPoo
         "the nightly pass over the same evidence raises nothing new"
     );
 
-    let flag: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM abuse_flag WHERE org_id = $1")
-            .bind(db_uuid(ORG_A.0))
-            .fetch_one(&app)
-            .await
-            .expect("the flag reads");
+    let flag: uuid::Uuid = sqlx::query_scalar("SELECT id FROM abuse_flag WHERE org_id = $1")
+        .bind(db_uuid(ORG_A.0))
+        .fetch_one(&app)
+        .await
+        .expect("the flag reads");
     abuse
         .decide(Decision {
             flag: Uuid(*flag.as_bytes()),
@@ -313,12 +322,28 @@ async fn the_scorer_flags_shared_values_once_and_respects_a_dismissal(app: PgPoo
         .await
         .expect("the dismissal runs")
         .expect("the flag exists");
-    assert_eq!(abuse.score(None, LATER).await.expect("the pass runs").raised, 0);
-    assert!(open_flags(&app, ORG_A).await.is_empty(), "dismissed stays dismissed");
+    assert_eq!(
+        abuse
+            .score(None, LATER)
+            .await
+            .expect("the pass runs")
+            .raised,
+        0
+    );
+    assert!(
+        open_flags(&app, ORG_A).await.is_empty(),
+        "dismissed stays dismissed"
+    );
 
     let backoffice = AbuseBackofficeRepo::new(app.clone());
-    let rows = backoffice.flagged(true, None).await.expect("the list reads");
-    let row = rows.iter().find(|row| row.org == ORG_A).expect("A is listed");
+    let rows = backoffice
+        .flagged(true, None)
+        .await
+        .expect("the list reads");
+    let row = rows
+        .iter()
+        .find(|row| row.org == ORG_A)
+        .expect("A is listed");
     assert_eq!(row.linked_orgs, 1, "only the device links A to anyone");
     assert_eq!(row.signal_kinds, [SignalKind::DeviceFingerprint]);
     assert_eq!(row.standing, AbuseAction::None);
@@ -342,7 +367,9 @@ async fn three_sign_ups_from_one_address_in_a_day_are_flagged(app: PgPool) {
             .expect("the signal records");
     }
     assert!(
-        !open_flags(&app, ORG_A).await.contains(&"signup_burst".to_owned()),
+        !open_flags(&app, ORG_A)
+            .await
+            .contains(&"signup_burst".to_owned()),
         "two sign-ups are not a burst"
     );
     abuse
@@ -356,7 +383,9 @@ async fn three_sign_ups_from_one_address_in_a_day_are_flagged(app: PgPool) {
         .expect("the signal records");
     for org in [ORG_A, ORG_B, ORG_C] {
         assert!(
-            open_flags(&app, org).await.contains(&"signup_burst".to_owned()),
+            open_flags(&app, org)
+                .await
+                .contains(&"signup_burst".to_owned()),
             "every account in the burst is flagged"
         );
     }
@@ -386,7 +415,12 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
 
     let abuse = AbuseRepo::new(app.clone());
     assert!(abuse
-        .raise(ORG_A, FlagKind::SharedShop, "Shares a shop with 1 other account.", NOW)
+        .raise(
+            ORG_A,
+            FlagKind::SharedShop,
+            "Shares a shop with 1 other account.",
+            NOW
+        )
         .await
         .expect("the flag raises"));
     let flag: uuid::Uuid = sqlx::query_scalar("SELECT id FROM abuse_flag WHERE org_id = $1")
@@ -409,9 +443,15 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
         .expect("the ban runs")
         .expect("the flag exists");
 
-    assert_eq!(abuse.standing(ORG_A).await.expect("standing reads"), AbuseAction::Ban);
     assert_eq!(
-        sessions.resolve(&token, NOW).await.expect("the resolve runs"),
+        abuse.standing(ORG_A).await.expect("standing reads"),
+        AbuseAction::Ban
+    );
+    assert_eq!(
+        sessions
+            .resolve(&token, NOW)
+            .await
+            .expect("the resolve runs"),
         None,
         "a ban ends every session the organisation held"
     );
@@ -432,7 +472,11 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
         .is_banned(BannedKind::Email, &email, NOW)
         .await
         .expect("the ban reads"));
-    assert_eq!(balance(&app, ORG_A).await, 0, "a ban takes the free moves back");
+    assert_eq!(
+        balance(&app, ORG_A).await,
+        0,
+        "a ban takes the free moves back"
+    );
 
     unlink(&app, ORG_A).await;
     let refused = devices
@@ -460,7 +504,10 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
         .await
         .expect("the lift runs")
         .expect("the flag exists");
-    assert_eq!(abuse.standing(ORG_A).await.expect("standing reads"), AbuseAction::None);
+    assert_eq!(
+        abuse.standing(ORG_A).await.expect("standing reads"),
+        AbuseAction::None
+    );
     assert!(!abuse
         .is_banned(BannedKind::Email, &email, NOW)
         .await

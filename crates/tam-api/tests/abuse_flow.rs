@@ -11,7 +11,9 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tam_api::abuse::{AbuseFlagsView, AbuseOrgView, DISPOSABLE_REFUSAL, SUSPENDED, VELOCITY_REFUSAL};
+use tam_api::abuse::{
+    AbuseFlagsView, AbuseOrgView, DISPOSABLE_REFUSAL, SUSPENDED, VELOCITY_REFUSAL,
+};
 use tam_api::account_consent::InternalSecret;
 use tam_api::{router, AppState, BlobStore, Config, SESSION_COOKIE};
 use tam_secrets::Kek;
@@ -86,7 +88,12 @@ async fn provision(pool: &PgPool) {
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
-        (ORG_A, USER_OPERATOR, "operator@example.test", TOKEN_OPERATOR),
+        (
+            ORG_A,
+            USER_OPERATOR,
+            "operator@example.test",
+            TOKEN_OPERATOR,
+        ),
         (ORG_B, USER_SELLER, "seller@example.test", TOKEN_SELLER),
     ] {
         sessions
@@ -147,7 +154,10 @@ struct Call<'a> {
 async fn send(state: AppState, call: Call<'_>) -> (StatusCode, serde_json::Value) {
     let mut request = Request::builder().method(call.method).uri(call.uri);
     if let Some(token) = call.token {
-        request = request.header(header::COOKIE, format!("{SESSION_COOKIE}={}", token.to_hex()));
+        request = request.header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        );
     }
     if let Some(secret) = call.secret {
         request = request.header("x-tam-internal-secret", secret);
@@ -199,12 +209,24 @@ fn message(body: &serde_json::Value) -> &str {
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_sign_up_screen_is_fenced_like_the_consent_route(app: PgPool) {
-    for (secret, offered) in [(None, Some(SECRET)), (Some(SECRET), None), (Some(SECRET), Some("wrong"))] {
+    for (secret, offered) in [
+        (None, Some(SECRET)),
+        (Some(SECRET), None),
+        (Some(SECRET), Some("wrong")),
+    ] {
         let (status, _) = screen(&app, secret, offered, "teacher@school.nz").await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "an unfenced caller meets an unknown path");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "an unfenced caller meets an unknown path"
+        );
     }
     let (status, _) = screen(&app, Some(SECRET), Some(SECRET), "teacher@school.nz").await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "an ordinary sign-up proceeds");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "an ordinary sign-up proceeds"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -224,14 +246,43 @@ async fn the_sixth_sign_up_from_one_address_in_a_day_is_refused(app: PgPool) {
     }
     // Older than a day, and a second agreement by an existing account: neither
     // is a sign-up today.
-    consent(&app, "e0e0e0e0-0000-4000-8000-000000000000", "t@school.nz", "203.0.113.9", 90_000_000).await;
-    consent(&app, "d0d0d0d0-0000-4000-8000-000000000000", "t@school.nz", "203.0.113.9", 60_000).await;
+    consent(
+        &app,
+        "e0e0e0e0-0000-4000-8000-000000000000",
+        "t@school.nz",
+        "203.0.113.9",
+        90_000_000,
+    )
+    .await;
+    consent(
+        &app,
+        "d0d0d0d0-0000-4000-8000-000000000000",
+        "t@school.nz",
+        "203.0.113.9",
+        60_000,
+    )
+    .await;
     let (status, _) = screen(&app, Some(SECRET), Some(SECRET), "fifth@school.nz").await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "four today: the fifth is allowed");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "four today: the fifth is allowed"
+    );
 
-    consent(&app, "d9d9d9d9-0000-4000-8000-000000000009", "t@school.nz", "203.0.113.9", 60_000).await;
+    consent(
+        &app,
+        "d9d9d9d9-0000-4000-8000-000000000009",
+        "t@school.nz",
+        "203.0.113.9",
+        60_000,
+    )
+    .await;
     let (status, body) = screen(&app, Some(SECRET), Some(SECRET), "sixth@school.nz").await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "five today: the sixth is refused");
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "five today: the sixth is refused"
+    );
     assert_eq!(message(&body), VELOCITY_REFUSAL);
 }
 
@@ -243,14 +294,22 @@ async fn an_operator_bans_a_flagged_seller_and_lifts_it(app: PgPool) {
     let backoffice = backoffice_pool(&app).await;
     let operator = |pool: &PgPool| state(pool.clone(), Some(backoffice.clone()), Some(SECRET));
     assert!(AbuseRepo::new(app.clone())
-        .raise(ORG_B, FlagKind::SharedShop, "Shares a shop with 1 other account.", NOW)
+        .raise(
+            ORG_B,
+            FlagKind::SharedShop,
+            "Shares a shop with 1 other account.",
+            NOW
+        )
         .await
         .expect("the flag raises"));
 
     for token in [Some(&TOKEN_SELLER), None] {
         for (method, uri) in [
             ("GET", "/v1/admin/abuse/flags".to_owned()),
-            ("GET", "/v1/admin/abuse/orgs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_owned()),
+            (
+                "GET",
+                "/v1/admin/abuse/orgs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_owned(),
+            ),
             (
                 "POST",
                 "/v1/admin/abuse/flags/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/dismiss".to_owned(),
@@ -258,16 +317,32 @@ async fn an_operator_bans_a_flagged_seller_and_lifts_it(app: PgPool) {
         ] {
             let (status, _) = send(
                 operator(&app),
-                Call { method, uri: &uri, token, secret: None, body: None },
+                Call {
+                    method,
+                    uri: &uri,
+                    token,
+                    secret: None,
+                    body: None,
+                },
             )
             .await;
-            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri} is the operator's");
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} is the operator's"
+            );
         }
     }
 
     let (status, body) = send(
         operator(&app),
-        Call { method: "GET", uri: "/v1/admin/abuse/flags", token: Some(&TOKEN_OPERATOR), secret: None, body: None },
+        Call {
+            method: "GET",
+            uri: "/v1/admin/abuse/flags",
+            token: Some(&TOKEN_OPERATOR),
+            secret: None,
+            body: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -281,24 +356,50 @@ async fn an_operator_bans_a_flagged_seller_and_lifts_it(app: PgPool) {
 
     let (_, body) = send(
         operator(&app),
-        Call { method: "GET", uri: "/v1/admin/abuse/flags?q=SELLER@school.nz", token: Some(&TOKEN_OPERATOR), secret: None, body: None },
+        Call {
+            method: "GET",
+            uri: "/v1/admin/abuse/flags?q=SELLER@school.nz",
+            token: Some(&TOKEN_OPERATOR),
+            secret: None,
+            body: None,
+        },
     )
     .await;
     let searched: AbuseFlagsView = serde_json::from_value(body).expect("the search reads");
     assert_eq!(searched.query, "email");
-    assert_eq!(searched.orgs.len(), 1, "the seller is found by the address they signed up with");
+    assert_eq!(
+        searched.orgs.len(),
+        1,
+        "the seller is found by the address they signed up with"
+    );
 
     let ban = format!("/v1/admin/abuse/flags/{}/ban", flag.to_hyphenated());
     let (status, body) = send(
         operator(&app),
-        Call { method: "POST", uri: &ban, token: Some(&TOKEN_OPERATOR), secret: None, body: Some(serde_json::json!({ "reason": "  " })) },
+        Call {
+            method: "POST",
+            uri: &ban,
+            token: Some(&TOKEN_OPERATOR),
+            secret: None,
+            body: Some(serde_json::json!({ "reason": "  " })),
+        },
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "a ban says why: {body}");
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a ban says why: {body}"
+    );
 
     let (status, body) = send(
         operator(&app),
-        Call { method: "POST", uri: &ban, token: Some(&TOKEN_OPERATOR), secret: None, body: Some(serde_json::json!({ "reason": "Ten accounts on one shop" })) },
+        Call {
+            method: "POST",
+            uri: &ban,
+            token: Some(&TOKEN_OPERATOR),
+            secret: None,
+            body: Some(serde_json::json!({ "reason": "Ten accounts on one shop" })),
+        },
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -313,7 +414,13 @@ async fn an_operator_bans_a_flagged_seller_and_lifts_it(app: PgPool) {
         .expect("a session mints after the ban");
     let (status, body) = send(
         operator(&app),
-        Call { method: "GET", uri: "/v1/whoami", token: Some(&TOKEN_SELLER), secret: None, body: None },
+        Call {
+            method: "GET",
+            uri: "/v1/whoami",
+            token: Some(&TOKEN_SELLER),
+            secret: None,
+            body: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -328,16 +435,36 @@ async fn an_operator_bans_a_flagged_seller_and_lifts_it(app: PgPool) {
     let dismiss = format!("/v1/admin/abuse/flags/{}/dismiss", flag.to_hyphenated());
     let (status, body) = send(
         operator(&app),
-        Call { method: "POST", uri: &dismiss, token: Some(&TOKEN_OPERATOR), secret: None, body: None },
+        Call {
+            method: "POST",
+            uri: &dismiss,
+            token: Some(&TOKEN_OPERATOR),
+            secret: None,
+            body: None,
+        },
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = send(
         operator(&app),
-        Call { method: "GET", uri: "/v1/whoami", token: Some(&TOKEN_SELLER), secret: None, body: None },
+        Call {
+            method: "GET",
+            uri: "/v1/whoami",
+            token: Some(&TOKEN_SELLER),
+            secret: None,
+            body: None,
+        },
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "the lift takes effect on the next request");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the lift takes effect on the next request"
+    );
     let (status, _) = screen(&app, Some(SECRET), Some(SECRET), "seller@school.nz").await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "and the address may sign up again");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "and the address may sign up again"
+    );
 }

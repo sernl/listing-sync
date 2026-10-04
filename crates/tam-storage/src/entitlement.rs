@@ -820,7 +820,10 @@ pub(crate) async fn grant_storefront_allowance_in(
         at,
     } = allowance;
     let now = timestamp_to_db(at)?;
-    if crate::abuse::standing_in(tx, org).await?.withholds_free_moves() {
+    if crate::abuse::standing_in(tx, org)
+        .await?
+        .withholds_free_moves()
+    {
         return Ok(false);
     }
     // The primary key crosses the tenant fence even though the policy does

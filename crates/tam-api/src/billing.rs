@@ -987,7 +987,12 @@ pub(crate) async fn webhook(
     // one card can be seen. Evidence, not fulfilment: a failure is logged
     // and the nightly sweep catches the charge up.
     if event.kind == "charge.succeeded" {
-        if let Some(charge) = event.data.object.get("id").and_then(serde_json::Value::as_str) {
+        if let Some(charge) = event
+            .data
+            .object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+        {
             if let Err(error) = crate::abuse::harvest_cards(&state, Some(charge)).await {
                 eprintln!("tam-api: a card fingerprint was not recorded: {error}");
             }

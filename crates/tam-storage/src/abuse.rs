@@ -371,8 +371,16 @@ pub(crate) async fn score_in(
     let mut raised = 0;
     for (signal, flag, noun) in [
         (SignalKind::ShopDigest, FlagKind::SharedShop, "a shop"),
-        (SignalKind::DeviceFingerprint, FlagKind::SharedDevice, "a device"),
-        (SignalKind::PaymentFingerprint, FlagKind::SharedPayment, "a card"),
+        (
+            SignalKind::DeviceFingerprint,
+            FlagKind::SharedDevice,
+            "a device",
+        ),
+        (
+            SignalKind::PaymentFingerprint,
+            FlagKind::SharedPayment,
+            "a card",
+        ),
     ] {
         raised += sqlx::query!(
             r#"INSERT INTO abuse_flag (id, org_id, kind, score, reason, created_at)
@@ -634,7 +642,7 @@ impl AbuseRepo {
             reason,
             by,
             at,
-            identities,
+            identities: _,
         } = decision;
         let now = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
@@ -681,7 +689,7 @@ impl AbuseRepo {
         .execute(&mut *tx)
         .await?;
         if action == AbuseAction::Ban {
-            ban_in(&mut tx, org, flag, reason, at, identities).await?;
+            ban_in(&mut tx, org, &decision).await?;
         } else if before == AbuseAction::Ban {
             sqlx::query!(
                 "DELETE FROM banned_identity WHERE origin_org = $1",
@@ -855,16 +863,22 @@ impl AbuseRepo {
 async fn ban_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
-    flag: Uuid,
-    reason: Option<&str>,
-    at: Timestamp,
-    identities: &[(BannedKind, [u8; 32])],
+    decision: &Decision<'_>,
 ) -> Result<(), StorageError> {
+    let Decision {
+        flag,
+        reason,
+        at,
+        identities,
+        ..
+    } = *decision;
     let now = timestamp_to_db(at)?;
     let until = now
         .checked_add_months(chrono::Months::new(BAN_MONTHS))
         .ok_or(StorageError::TimestampOutOfRange { millis: at.0 })?;
-    let reason = reason.filter(|said| !said.is_empty()).unwrap_or("Suspended");
+    let reason = reason
+        .filter(|said| !said.is_empty())
+        .unwrap_or("Suspended");
     sqlx::query!(
         "DELETE FROM user_session WHERE org_id = $1",
         uuid_to_db(org.0)
@@ -1013,7 +1027,7 @@ pub struct AbuseBackofficeRepo {
     pool: PgPool,
 }
 
-fn kinds_from_db<T>(raw: Vec<String>, parse: fn(&str) -> Option<T>) -> Result<Vec<T>, StorageError> {
+fn kinds_from_db<T>(raw: &[String], parse: fn(&str) -> Option<T>) -> Result<Vec<T>, StorageError> {
     raw.iter()
         .map(|kind| {
             parse(kind).ok_or_else(|| StorageError::CorruptRow {
@@ -1075,7 +1089,8 @@ impl AbuseBackofficeRepo {
                 .await?
             }
             AbuseSearch::Digest(value, kinds) => {
-                let kinds: Vec<String> = kinds.iter().map(|kind| kind.as_str().to_owned()).collect();
+                let kinds: Vec<String> =
+                    kinds.iter().map(|kind| kind.as_str().to_owned()).collect();
                 sqlx::query_scalar!(
                     r#"SELECT DISTINCT org_id AS "org!" FROM account_link_signal
                         WHERE value_hash = $1 AND kind = ANY($2)
@@ -1109,7 +1124,10 @@ impl AbuseBackofficeRepo {
                 .await?
             }
         };
-        Ok(rows.into_iter().map(|org| OrgId(uuid_from_db(org))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|org| OrgId(uuid_from_db(org)))
+            .collect())
     }
 
     /// The flagged organisations: those with an open flag, or every one that
@@ -1174,9 +1192,9 @@ impl AbuseBackofficeRepo {
                     name: row.name,
                     slug: row.slug,
                     score: row.score,
-                    kinds: kinds_from_db(kinds, FlagKind::parse)?,
+                    kinds: kinds_from_db(&kinds, FlagKind::parse)?,
                     signal_kinds: match link {
-                        Some(link) => kinds_from_db(link.kinds.clone(), SignalKind::parse)?,
+                        Some(link) => kinds_from_db(&link.kinds, SignalKind::parse)?,
                         None => Vec::new(),
                     },
                     linked_orgs: link.map_or(0, |link| link.linked),
@@ -1251,8 +1269,10 @@ impl AbuseBackofficeRepo {
                 .map(|row| {
                     Ok(FlagRecord {
                         id: uuid_from_db(row.id),
-                        kind: FlagKind::parse(&row.kind).ok_or_else(|| StorageError::CorruptRow {
-                            reason: format!("unknown flag kind {:?}", row.kind),
+                        kind: FlagKind::parse(&row.kind).ok_or_else(|| {
+                            StorageError::CorruptRow {
+                                reason: format!("unknown flag kind {:?}", row.kind),
+                            }
                         })?,
                         score: row.score,
                         reason: row.reason,
@@ -1289,7 +1309,7 @@ impl AbuseBackofficeRepo {
                         org: OrgId(uuid_from_db(row.org)),
                         name: row.name,
                         standing: AbuseAction::from_db(&row.standing)?,
-                        shared: kinds_from_db(row.kinds, SignalKind::parse)?,
+                        shared: kinds_from_db(&row.kinds, SignalKind::parse)?,
                     })
                 })
                 .collect::<Result<_, StorageError>>()?,

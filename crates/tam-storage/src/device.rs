@@ -793,7 +793,8 @@ async fn bind_storefront(
     // A shop a ban still refuses is refused to every organisation, before
     // anything is written: the whole beat rolls back, as it does for a shop
     // bound elsewhere.
-    if crate::abuse::is_banned_in(tx, crate::abuse::BannedKind::ShopDigest, &digest[..], at).await? {
+    if crate::abuse::is_banned_in(tx, crate::abuse::BannedKind::ShopDigest, &digest[..], at).await?
+    {
         return Err(match marketplace_from_db(marketplace) {
             Ok(named) => StorageError::StorefrontSuspended { marketplace: named },
             Err(corrupt) => corrupt,

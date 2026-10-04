@@ -1,5 +1,5 @@
 # disposable-email-domains/disposable-email-domains @ db468d422f8e8e1af3d4d67131ab071239d704f7 (disposable_email_blocklist.conf, CC0)
-# Refresh: just abuse-disposable-refresh
+# Refresh: docs/notes/design/abuse-prevention.md, "Refreshing the throwaway list"
 0-mail.com
 0-mailer.dynv6.net
 000-webmail.myhome-server.de

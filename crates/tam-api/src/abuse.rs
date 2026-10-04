@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    AbuseAction, AbuseBackofficeRepo, AbuseOrgDetail, AbuseRepo, AbuseSearch, BannedKind,
-    Decision, DeviceRepo, FlagKind, FlaggedOrg, Signal, SignalKind, SIGNUPS_PER_IP_PER_DAY,
+    AbuseAction, AbuseBackofficeRepo, AbuseOrgDetail, AbuseRepo, AbuseSearch, BannedKind, Decision,
+    DeviceRepo, FlagKind, FlaggedOrg, Signal, SignalKind, SIGNUPS_PER_IP_PER_DAY,
 };
 use tam_types::{Marketplace, OrgId, Timestamp, Uuid};
 
@@ -84,7 +84,9 @@ pub fn is_disposable(email_or_domain: &str) -> bool {
 #[must_use]
 pub fn email_domain(email: &str) -> String {
     let trimmed = email.trim();
-    let domain = trimmed.rsplit_once('@').map_or(trimmed, |(_, domain)| domain);
+    let domain = trimmed
+        .rsplit_once('@')
+        .map_or(trimmed, |(_, domain)| domain);
     domain.trim_end_matches('.').to_ascii_lowercase()
 }
 
@@ -142,7 +144,11 @@ fn digest(state: &AppState, kind: &str, value: &str) -> Option<[u8; 32]> {
 
 /// An email address's digest, normalised the way `account::email_hash` is.
 fn email_digest(state: &AppState, email: &str) -> Option<[u8; 32]> {
-    digest(state, BannedKind::Email.as_str(), &email.trim().to_lowercase())
+    digest(
+        state,
+        BannedKind::Email.as_str(),
+        &email.trim().to_lowercase(),
+    )
 }
 
 /// A device id's digest, the value both the ledger and a ban hold.
@@ -181,7 +187,12 @@ async fn record(state: &AppState, org: OrgId, kind: SignalKind, value: &str, at:
 }
 
 /// A sign-in reached the session exchange: its address and browser.
-pub(crate) async fn record_sign_in(state: &AppState, org: OrgId, headers: &HeaderMap, at: Timestamp) {
+pub(crate) async fn record_sign_in(
+    state: &AppState,
+    org: OrgId,
+    headers: &HeaderMap,
+    at: Timestamp,
+) {
     if let Some(ip) = client_ip(headers) {
         record(state, org, SignalKind::Ip, &ip.to_string(), at).await;
     }
@@ -458,7 +469,11 @@ fn row_view(row: FlaggedOrg) -> AbuseOrgRow {
         name: row.name,
         slug: row.slug,
         score: row.score,
-        kinds: row.kinds.iter().map(|kind| kind.as_str().to_owned()).collect(),
+        kinds: row
+            .kinds
+            .iter()
+            .map(|kind| kind.as_str().to_owned())
+            .collect(),
         signal_kinds: row
             .signal_kinds
             .iter()
@@ -537,7 +552,12 @@ async fn search(
     let fault = |error: tam_storage::StorageError| state.internal(&error.to_string());
     let query = raw.trim();
     if query.contains('@') {
-        return Ok(("email", repo.search(AbuseSearch::Email(query)).await.map_err(fault)?));
+        return Ok((
+            "email",
+            repo.search(AbuseSearch::Email(query))
+                .await
+                .map_err(fault)?,
+        ));
     }
     if let Ok(ip) = query.parse::<IpAddr>() {
         let Some(value) = digest(state, SignalKind::Ip.as_str(), &ip.to_string()) else {
@@ -582,7 +602,10 @@ async fn search(
                 .map_err(fault)?,
         ));
     }
-    Ok(("name", repo.search(AbuseSearch::Name(query)).await.map_err(fault)?))
+    Ok((
+        "name",
+        repo.search(AbuseSearch::Name(query)).await.map_err(fault)?,
+    ))
 }
 
 /// `GET /{version}/admin/abuse/flags`.

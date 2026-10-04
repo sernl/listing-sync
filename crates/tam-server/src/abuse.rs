@@ -12,7 +12,9 @@
 use core::time::Duration;
 
 use tam_api::AppState;
-use tam_storage::{AbuseAction, AbuseMailOutcome, AbuseRepo, ClaimedAbuseMail, ABUSE_MAIL_ATTEMPTS};
+use tam_storage::{
+    AbuseAction, AbuseMailOutcome, AbuseRepo, ClaimedAbuseMail, ABUSE_MAIL_ATTEMPTS,
+};
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 
@@ -20,8 +22,8 @@ use crate::notify::{escaped, AddressResolver, Mail, Relay, RelayError, ResolveEr
 
 /// How often the nightly pass runs. Once a day, the first a minute after
 /// start-up so a restart does not skip a night.
-const PASS_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-const FIRST_PASS: Duration = Duration::from_secs(60);
+const PASS_INTERVAL: Duration = Duration::from_hours(24);
+const FIRST_PASS: Duration = Duration::from_mins(1);
 /// How long the drainer waits when nothing is due.
 const IDLE: Duration = Duration::from_secs(5);
 const SEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -82,7 +84,12 @@ pub(crate) fn spawn_pass(state: AppState, cancel: CancellationToken) {
 /// evidence is in it: the operator's reason stays on the Abuse page, and a
 /// mail naming another account would tell one seller about another.
 #[must_use]
-pub(crate) fn compose(action: AbuseAction, org_name: &str, name: Option<&str>, console_url: &str) -> Mail {
+pub(crate) fn compose(
+    action: AbuseAction,
+    org_name: &str,
+    name: Option<&str>,
+    console_url: &str,
+) -> Mail {
     let greeting = match name.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => format!("Kia ora {},", escaped(name)),
         None => "Kia ora,".to_owned(),
@@ -240,13 +247,26 @@ mod tests {
 
     #[test]
     fn the_warning_and_the_suspension_say_different_things_and_name_no_evidence() {
-        let warn = compose(AbuseAction::Warn, "Kiwi <Maths>", Some("Ana"), "https://dash.teachouse.io/");
+        let warn = compose(
+            AbuseAction::Warn,
+            "Kiwi <Maths>",
+            Some("Ana"),
+            "https://dash.teachouse.io/",
+        );
         assert_eq!(warn.subject, "About your Teachouse account");
         assert!(warn.html.contains("Kia ora Ana,"));
-        assert!(warn.html.contains("Kiwi &lt;Maths&gt;"), "the name is escaped");
+        assert!(
+            warn.html.contains("Kiwi &lt;Maths&gt;"),
+            "the name is escaped"
+        );
         assert_eq!(warn.href, "https://dash.teachouse.io");
 
-        let ban = compose(AbuseAction::Ban, "Kiwi Maths", None, "https://dash.teachouse.io");
+        let ban = compose(
+            AbuseAction::Ban,
+            "Kiwi Maths",
+            None,
+            "https://dash.teachouse.io",
+        );
         assert_eq!(ban.subject, "Your Teachouse account is suspended");
         assert!(ban.html.contains("Kia ora,"));
         assert!(ban.html.contains("contact@teachouse.io"));

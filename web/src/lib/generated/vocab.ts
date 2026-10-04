@@ -68,6 +68,7 @@ export type APIErrorCode =
   | "device_offline"
   | "streaming_unavailable"
   | "account_suspended"
+  | "signup_refused"
   | "internal";
 
 export const API_ERROR_CODES: readonly APIErrorCode[] = [
@@ -103,6 +104,7 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "device_offline",
   "streaming_unavailable",
   "account_suspended",
+  "signup_refused",
   "internal",
 ];
 
