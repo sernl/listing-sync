@@ -1035,7 +1035,7 @@ async fn a_seller_reaches_only_their_own_payments_and_only_a_refund_the_policy_g
         .await;
         assert_eq!(
             status,
-            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
             "a seller is not an operator: {path}"
         );
     }
