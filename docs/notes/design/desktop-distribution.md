@@ -1,9 +1,10 @@
 # Distributing the desktop client
 
-How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
+How a Teachouse release is built, signed, published and updated on every platform — Windows, macOS, Linux and Android, and the Microsoft Store, the Mac App Store and Google Play — and what the founder must do by hand before each store's first release.
+The secrets inventory and the step-by-step setup are in `docs/notes/runbooks/release.md`; this note is the design and its sources.
 
 - date: 2026-09-03
-- status: every tag from `v0.1.3` to `v0.3.4` is published to both the Cloud's beta channel and GitHub; from `v0.2.0` the Android job succeeds in the same run, so the APK and its sums file ride the release rather than a repair dispatch; `v0.4.0` (phases 0-2), `v0.5.0` (phase 3) `v0.6.0` (phase 4) and `v0.7.0` (phase 5) are the releases that follow each phase of the 2026-09-12 plan of record, and a release is owed at every phase's end; the sums files are written with bare names from `v0.5.0` on; Windows builds are still unsigned because no Azure Artifact Signing account exists
+- status: every tag from `v0.1.3` to `v0.3.4` is published to both the Cloud's beta channel and GitHub; from `v0.2.0` the Android job succeeds in the same run, so the APK and its sums file ride the release rather than a repair dispatch; `v0.4.0` (phases 0-2), `v0.5.0` (phase 3) `v0.6.0` (phase 4) and `v0.7.0` (phase 5) are the releases that follow each phase of the 2026-09-12 plan of record, and a release is owed at every phase's end; the sums files are written with bare names from `v0.5.0` on; Windows builds are still unsigned because no Azure Artifact Signing account exists; from `v0.21.0` the workflow also builds macOS (Developer ID and Mac App Store), signs Linux updates, builds the Android AAB for Google Play and the Microsoft Store's installer, each gated on its own secrets, none of which exist yet
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -20,7 +21,8 @@ Source: <https://v2.tauri.app/plugin/updater/>, fetched 2026-09-03.
 Setting `bundle.createUpdaterArtifacts` to `true` makes the Windows build emit `Teachouse_<version>_x64-setup.exe` and `Teachouse_<version>_x64_en-US.msi` each with a sibling `.sig` file, and those installers are themselves the update payloads; the `"v1Compatible"` value, which wraps them in archives, exists only for applications migrating from Tauri v1 and does not apply here.
 The same page records that the option "will be removed in v3", so it is a migration artefact rather than a permanent knob.
 
-The manifest the updater fetches carries the signature inline: the `signature` field is "The content of the generated `.sig` file... A path or URL does not work!", `version` is SemVer with or without a leading `v`, `pub_date` must be RFC 3339 when present, and the platform keys are `OS-ARCH` — `windows-x86_64` for this build.
+The manifest the updater fetches carries the signature inline: the `signature` field is "The content of the generated `.sig` file... A path or URL does not work!", `version` is SemVer with or without a leading `v`, `pub_date` must be RFC 3339 when present, and the platform keys are `OS-ARCH`, optionally suffixed with the bundle type.
+tauri-plugin-updater 2.11.0 looks up `{os}-{arch}-{bundle}` first and `{os}-{arch}` second (`plugins/updater/src/updater.rs`, `get_urls`), where the bundle is `nsis`, `msi`, `app`, `appimage`, `deb` or `rpm`; the generated `latest.json` therefore carries `windows-x86_64` and `windows-x86_64-nsis` (the NSIS installer), `windows-x86_64-msi`, `darwin-aarch64`, `darwin-x86_64` and their `-app` forms (the one universal archive), `linux-x86_64` and `linux-x86_64-appimage`, and `linux-x86_64-deb`, which is what tauri-action writes for the same artefacts.
 Tauri validates the whole manifest before it looks at the version, so a malformed entry for a platform we do not ship would break updates for the one we do.
 
 The endpoint already configured in `apps/desktop/src-tauri/tauri.conf.json` is CrabNebula's, and its shape is confirmed by CrabNebula's own documentation: `https://cdn.crabnebula.app/update/ORG_NAME/APP_NAME/{{target}}-{{arch}}/{{current_version}}`.
@@ -141,6 +143,50 @@ The timestamp is mandatory rather than advisory, because "Artifact Signing certi
 The two absolute paths in that command are discovered on the runner rather than hardcoded, because Microsoft documents the installer but not where it lands.
 The step fails loudly and by name if either the signing library or SignTool is not found after the install, which is the failure most likely to greet the founder's first signed release.
 
+Tauri's guide documents a second Windows path, an exported certificate: import the `.pfx` into the user store and set `bundle.windows.certificateThumbprint`, `digestAlgorithm` and `timestampUrl`, after which Tauri runs SignTool itself (<https://v2.tauri.app/distribute/sign/windows/>, fetched 2026-10-05).
+The workflow carries it as the fallback — `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`, used only when the `AZURE_*` secrets are absent — because Tauri's page makes no recommendation between the two and Microsoft's does.
+It is a fallback with a short reach: since June 2023 the CA/Browser Forum requires new OV and EV code-signing keys to be generated in hardware, so a certificate bought today normally cannot be exported to a `.pfx` at all, which Tauri's page does not mention.
+Whichever path signs, the job then checks every `.exe` and `.msi` with `Get-AuthenticodeSignature`, so a sign command that ran and signed nothing fails the run rather than shipping as signed.
+
+## Every platform, as of 0.21.0
+
+Read from <https://v2.tauri.app/distribute/> and each page under it, the updater plugin page, the GitHub pipeline page and the tauri-action README, all on 2026-10-05.
+
+**macOS** is one universal build (`--target universal-apple-darwin --bundles app,dmg`), signed with a Developer ID Application certificate under the hardened runtime (`bundle.macOS.hardenedRuntime`, Tauri's default), and notarized by Tauri itself from whichever credentials are in the environment: `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID`, or `APPLE_API_ISSUER`, `APPLE_API_KEY` and a key file at `APPLE_API_KEY_PATH` (<https://v2.tauri.app/distribute/sign/macos/>).
+The certificate goes into a throwaway keychain, as Tauri's CI example does, and the identity is read back from it rather than configured, so `bundle.macOS.signingIdentity` stays null in the tree.
+Tauri notarizes and staples the `.app`; the workflow then signs, notarizes (`xcrun notarytool submit --wait`) and staples the `.dmg` itself, because that is the file a seller downloads, and checks both with `spctl`.
+`minimumSystemVersion` is set to 10.15 explicitly rather than left at Tauri's 10.13 default, and the Developer ID build carries no entitlements.
+The updater payload is the `.app.tar.gz`; the `.dmg` is never one (<https://v2.tauri.app/plugin/updater/>).
+CrabNebula has no universal platform — its DMG slugs are `dmg-aarch64` and `dmg-x86_64` and its update platforms `darwin-aarch64` and `darwin-x86_64` (<https://docs.crabnebula.dev/cloud/cli/upload-assets/>) — so the one file is uploaded under each, as copies named for the architecture; a minisign signature covers bytes, not names, so both archives share one `.sig`.
+An unsigned macOS build is never published: Gatekeeper refuses it on every Mac that downloads it, so without the certificate and notarization credentials the job is skipped.
+
+**The Mac App Store** build follows <https://v2.tauri.app/distribute/app-store/>: the provisioning profile embedded through `bundle.macOS.files`, the sandbox and team entitlements (`apps/desktop/src-tauri/Entitlements.appstore.plist`, with the team-scoped keys written in by the job from `APPLE_TEAM_ID`), `ITSAppUsesNonExemptEncryption` false in `Info.plist`, an Apple Distribution signature, `xcrun productbuild --sign … --component` and `xcrun altool --upload-app --type macos`.
+It is built with the crate's `app-store` feature, which leaves `tauri-plugin-updater` unregistered: App Review guideline 2.4.5(vii) forbids a Mac App Store app from updating itself, and the start-up check already refuses to ask an unregistered plugin.
+Sandboxed behaviour — marketplace sign-in, picking files, the library's peer connections — has not been exercised, and the runbook asks for that on TestFlight before the first review.
+
+**Linux** updates were not published before 0.21.0; the AppImage and the `.deb` were downloads only.
+They are now both update payloads, and that makes the plain `linux-x86_64` key ambiguous: the plugin installs a payload with the installer matching how the running copy was installed (`Update::install_inner` dispatches on the bundle type to `install_deb`, `install_rpm` or the AppImage path), so a `.deb` install handed the AppImage would fail in `dpkg`.
+The Linux build's endpoint therefore templates `{{target}}-{{arch}}-{{bundle_type}}`, which the plugin substitutes (2.11.0, `updater.rs` lines 471-486), and each bundle is uploaded to the Cloud under its suffixed platform, `linux-x86_64-appimage` and `linux-x86_64-deb`, a form the Cloud documents.
+Linux builds before 0.21.0 poll the bare `linux-x86_64` key, which nothing is uploaded under, so they are offered nothing rather than offered the wrong installer.
+Windows and macOS keep `{{target}}-{{arch}}`: each has one updatable bundle, and the installed Windows base polls exactly that.
+
+**Android** builds the AAB beside the APK in one Gradle run (`--apk --aab`), both signed with the upload key.
+The AAB goes to Google Play through `r0adkll/upload-google-play`, track `internal` unless `PLAY_TRACK` says otherwise; Tauri automates no part of a Play release and Play requires the first upload to be made by hand (<https://v2.tauri.app/distribute/google-play/>).
+Tauri's versionCode, `major*1000000 + minor*1000 + patch`, only ever rises, which is what Play requires of each upload.
+
+**The Microsoft Store** cannot take an MSIX from Tauri: the bundler's targets are `deb`, `rpm`, `appimage`, `nsis`, `msi`, `app` and `dmg`, and the MSIX issue (tauri-apps/tauri#4818) is open with "no explicit plans" as of January 2026.
+Tauri's guide instead submits an EXE: an NSIS installer with WebView2 bundled offline (`tauri.microsoftstore.conf.json`, `webviewInstallMode` `offlineInstaller`), signed, installed silently with `/S`, under a publisher name that differs from the product name (<https://v2.tauri.app/distribute/microsoft-store/>).
+Partner Center installs an EXE app from a URL the publisher hosts, at certification and on every Store install, so the URL must be public and must not change under a live submission.
+The GitHub release is private, so the URL is the download mirror's, which keeps the current Store installer and the one before it.
+The `microsoft-store` job waits for the mirror to serve the exact bytes the Windows job built, then replaces the draft submission's package with the Microsoft Store Developer CLI (`msstore submission update`, `msstore submission publish`); Microsoft archived its `store-submission` action in that CLI's favour, and the CLI covers EXE apps.
+
+**tauri-action** is not used, for three reasons read from its README and `src/upload-version-json.ts`: it publishes to GitHub releases and nothing else, where this pipeline publishes to the Cloud as well; from v1 its `latest.json` URLs point at the GitHub API asset URL, which a private repository answers only with a token the installed app does not have; and the workflow already names each artefact explicitly, which is what the Cloud upload needed after `v0.1.0`.
+Its `latest.json` key scheme is what `.github/scripts/updater-manifest.sh` reproduces, universal macOS archive included, so moving to it later changes no key.
+
+The workflow is split for the same reason the platforms are: `desktop-release.yml` holds the gates and the joins (verify, draft, console, the GitHub release, the Store submission, publish), and each platform is a reusable workflow it calls with `secrets: inherit` — `release-windows.yml`, `release-macos.yml`, `release-mac-app-store.yml`, `release-linux.yml`, `release-android.yml`.
+The setup every desktop build shares (the console artefact, the toolchain, the pinned CLI) is the composite action `.github/actions/tauri-setup`, and the release overlay (updater artefacts on, the channel's endpoint, any signing patch) is `.github/actions/release-overlay`.
+Which platforms a tag builds is decided once, by `.github/scripts/release-plan.sh` in the verify job, from which secrets exist; it writes the plan to the run summary, and `github-release` writes what each platform job came to.
+
 ## The workflow, and the rules it is built to
 
 `.github/workflows/desktop-release.yml` triggers only on a `v*.*.*` tag push, and every job additionally refuses to run on a fork.
@@ -171,8 +217,8 @@ An unsigned APK cannot be installed, so the job runs only when all three `ANDROI
 The `verify` job answers that question — `secrets` is not a context an `if:` may read, but a job-level `env:` is, so the boolean is computed there once and travels as an output — and when the answer is no the run summary records that the APK was skipped for want of a signing key.
 Building one anyway would cost twenty minutes of every tag and produce nothing installable, so the skip is the whole saving.
 The APK is additive to a release rather than a gate on it, which `v0.1.2` is the reason for stating explicitly.
-`publish` names only `windows` in its `needs`, so no Android outcome can hold back the desktop release at all.
-`github-release` still names `android`, because it has an APK to attach when there is one, but it runs on a successful Windows build whatever Android did and records in the run summary that the APK is absent and why.
+`publish` waits for every job that uploads to the Cloud draft, whatever their results, because a published release is sealed, and it requires only the Windows job's success.
+`github-release` downloads each platform's artefacts when that platform's job succeeded, and records in the run summary what each job came to.
 Both conditions use a status function, because a `needs` job that skips or fails would otherwise skip the job waiting on it, and then name the one result they actually require.
 Setting the three secrets is the only change needed to make the next tag carry an APK.
 The NDK version reaches both Android workflows through `.github/scripts/android-pins.sh`, which reads it from `flake.nix`, so the pin has one home rather than three.
@@ -254,20 +300,7 @@ az ad sp create-for-rbac --name teachouse-release --years 1
 Its `appId`, `password` and `tenant` become `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID` below, and the account name, profile name and the region's endpoint URI become the three `AZURE_SIGNING_*` repository variables.
 Nothing else needs installing: the workflow installs the Artifact Signing client tools on the runner itself.
 
-Create the GitHub secrets, at <https://github.com/sernl/listing-sync/settings/secrets/actions>, by exactly these names:
-
-- `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/.tauri/teachouse.key`, pasted whole
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password answered at generation; set it to an empty secret if you generated without one
-- `CN_API_KEY` — the CrabNebula key
-- `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` — the service principal; leave all three unset to build and release unsigned, which the workflow supports and reports
-- `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_BASE64` — the upload keystore, base64 of the file itself; leave any of the three unset and the Android job is skipped entirely, the release ships Windows only, and the run summary says why
-
-Create the repository variables, at <https://github.com/sernl/listing-sync/settings/variables/actions>, by exactly these names:
-
-- `CN_APPLICATION` — the `org/app` pair, required
-- `CN_CHANNEL` — optional; set it to `beta` to release to a channel instead of production, and unset it to go back. The workflow threads the same value through all four CrabNebula verbs, so a half-channelled release is not expressible
-- `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` — the endpoint URI from the region table, the account name, the certificate profile name; required only if the `AZURE_*` secrets are set
-- `UPDATER_BASE_URL` — optional; the base URL the fallback manifest's `url` fields are built from, and harmless to leave unset
+Create the GitHub secrets and variables by the exact names `docs/notes/runbooks/release.md` lists, which is the one inventory: it covers the updater key, the Cloud, Windows signing (Artifact Signing or a PFX), macOS, the Mac App Store, Android, Google Play and the Microsoft Store, where each value comes from, and what a missing one does.
 
 Then cut a release.
 Write `docs/releases/<version>.md` first, for a seller rather than for a reviewer, then bump the version in both `apps/desktop/src-tauri/tauri.conf.json` and `apps/desktop/src-tauri/Cargo.toml` to the same value, run `just release-check v<version>` locally until it passes, commit, and push the tag.

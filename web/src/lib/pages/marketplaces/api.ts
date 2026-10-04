@@ -94,33 +94,51 @@ export async function sendMarketplaceRequest(
 	return (await response.json()) as MarketplaceRequestView;
 }
 
-/** One published build: the file's name under `/downloads/`, the digest to check
- *  it against, and the release that file actually is.
- *
- *  `version` is per entry because the producer emits it per entry, and it does
- *  so deliberately: the Windows installer comes from an update channel while the
- *  Android package comes from its own listing, so the two sit at different
- *  releases routinely. `docs/notes/design/console-serving.md` states the rule it
- *  is protecting — "a manifest never reports one number for two different
- *  releases" — so an entry that carries its own version is the only number that
- *  may be printed beside that entry's file name. */
-export interface DownloadEntry {
+/** The file types the mirror publishes, by the platform that installs them. */
+export type DownloadKind = 'exe' | 'msi' | 'dmg' | 'appimage' | 'deb' | 'apk';
+
+const KINDS: readonly DownloadKind[] = ['exe', 'msi', 'dmg', 'appimage', 'deb', 'apk'];
+
+/** One published file: its name under `/downloads/`, the digest to check it
+ *  against, and its size in bytes where the producer measured it. */
+export interface DownloadFile {
+	kind: DownloadKind;
 	file: string;
 	sha256: string;
-	/** Absent where the producer emits none, as it does for Windows, whose
-	 *  release is the channel's. */
-	version?: string;
+	size: number | null;
 }
 
-/** What `/downloads/downloads.json` holds. A platform is `null` until a build
- *  for it is published, and the whole document is absent until the first one
- *  is, so both absences mean the same thing to the page. */
+/** One platform's published build, and its store listing where it has one.
+ *
+ *  `version` is per entry because each platform comes from the newest release
+ *  that carried it: a release whose macOS job was skipped leaves the previous
+ *  macOS build in place beside a newer Windows one.
+ *  `docs/notes/design/console-serving.md` states the rule this protects — "a
+ *  manifest never reports one number for two different releases" — so the
+ *  entry's own version is the only number printed beside its files. It is
+ *  null for an entry that carries a store listing and no file. */
+export interface DownloadEntry {
+	version: string | null;
+	/** When the release these files came from was published, RFC 3339. */
+	updated: string | null;
+	/** The file the card's button offers first, then the alternatives. */
+	files: DownloadFile[];
+	/** The platform's store listing, or null. */
+	store: string | null;
+}
+
+export type DownloadPlatform = 'windows' | 'macos' | 'linux' | 'android';
+
+/** What `/downloads/downloads.json` holds, written by `nix/downloads-refresh.sh`.
+ *  A platform is `null` until a build or a listing for it is published, and the
+ *  whole document is absent until the first one is, so both absences mean the
+ *  same thing to the page. */
 export interface DownloadsManifest {
 	version: string;
 	windows: DownloadEntry | null;
+	macos: DownloadEntry | null;
 	linux: DownloadEntry | null;
 	android: DownloadEntry | null;
-	apple: DownloadEntry | null;
 }
 
 /** A file name that stays inside `/downloads/`.
@@ -132,23 +150,71 @@ export interface DownloadsManifest {
  *  download it claims to be. */
 const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-function entry(value: unknown): DownloadEntry | null {
+/** The one host each platform's store listing may name. The same reasoning as
+ *  `SAFE_FILE`: a store link is an href, and it should only ever be the store
+ *  it says it is. */
+const STORE_HOST: Record<DownloadPlatform, string | null> = {
+	windows: 'apps.microsoft.com',
+	macos: 'apps.apple.com',
+	linux: null,
+	android: 'play.google.com'
+};
+
+function downloadFile(value: unknown): DownloadFile | null {
 	if (typeof value !== 'object' || value === null) {
 		return null;
 	}
 	const held = value as Record<string, unknown>;
-	const file = held.file;
-	const sha256 = held.sha256;
-	if (typeof file !== 'string' || typeof sha256 !== 'string') {
+	const { kind, file, sha256, size } = held;
+	if (typeof file !== 'string' || typeof sha256 !== 'string' || !SAFE_FILE.test(file)) {
 		return null;
 	}
-	if (!SAFE_FILE.test(file)) {
+	if (typeof kind !== 'string' || !KINDS.includes(kind as DownloadKind)) {
 		return null;
 	}
-	const version = held.version;
-	return typeof version === 'string' && version.length > 0
-		? { file, sha256, version }
-		: { file, sha256 };
+	return {
+		kind: kind as DownloadKind,
+		file,
+		sha256,
+		size: typeof size === 'number' && Number.isFinite(size) && size > 0 ? size : null
+	};
+}
+
+function storeLink(platform: DownloadPlatform, value: unknown): string | null {
+	const host = STORE_HOST[platform];
+	if (host === null || typeof value !== 'string') {
+		return null;
+	}
+	try {
+		const url = new URL(value);
+		return url.protocol === 'https:' && url.hostname === host ? url.href : null;
+	} catch {
+		return null;
+	}
+}
+
+function entry(platform: DownloadPlatform, value: unknown): DownloadEntry | null {
+	if (typeof value !== 'object' || value === null) {
+		return null;
+	}
+	const held = value as Record<string, unknown>;
+	const { version, updated } = held;
+	// Files without the release they belong to are not offered: the card would
+	// have no version to print beside them.
+	const files =
+		Array.isArray(held.files) && typeof version === 'string' && version.length > 0
+			? held.files.map(downloadFile).filter((file): file is DownloadFile => file !== null)
+			: [];
+	const store = storeLink(platform, held.store);
+	if (files.length === 0 && store === null) {
+		return null;
+	}
+	return {
+		version: files.length === 0 ? null : (version as string),
+		updated: files.length > 0 && typeof updated === 'string' && updated.length > 0 ? updated : null,
+		files,
+		store
+	};
 }
 
 /**
@@ -156,8 +222,8 @@ function entry(value: unknown): DownloadEntry | null {
  *
  * Absent, unreadable and malformed are one answer, because they are one fact
  * for the seller: no build is published, and every card reads "Coming soon".
- * A partial manifest keeps whatever platforms parse and drops the rest, so one
- * bad entry does not withdraw a download that exists.
+ * A partial manifest keeps whatever platforms and files parse and drops the
+ * rest, so one bad entry does not withdraw a download that exists.
  */
 export function readManifest(document: unknown): DownloadsManifest | null {
 	if (typeof document !== 'object' || document === null) {
@@ -169,10 +235,10 @@ export function readManifest(document: unknown): DownloadsManifest | null {
 	}
 	return {
 		version: held.version,
-		windows: entry(held.windows),
-		linux: entry(held.linux),
-		android: entry(held.android),
-		apple: entry(held.apple)
+		windows: entry('windows', held.windows),
+		macos: entry('macos', held.macos),
+		linux: entry('linux', held.linux),
+		android: entry('android', held.android)
 	};
 }
 

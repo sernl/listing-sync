@@ -48,20 +48,27 @@ describe('reading the download manifest', () => {
 		expect(readManifest({ version: '' })).toBeNull();
 	});
 
-	it('keeps the entries that parse and drops the ones that do not', () => {
+	it('keeps the entries and files that parse and drops the ones that do not', () => {
+		const exe = { kind: 'exe', file: 'Teachouse_0.2.0_x64-setup.exe', sha256: 'abc', size: 10 };
 		const held = readManifest({
 			version: '0.2.0',
-			windows: { file: 'teachouse-0.2.0.msi', sha256: 'abc' },
-			linux: { file: 'Teachouse_0.2.0_amd64.AppImage', sha256: 'def', version: '0.2.0' },
-			android: { file: 'teachouse-0.2.0.apk' },
-			apple: null
+			windows: {
+				version: '0.2.0',
+				updated: '2026-10-05T00:00:00Z',
+				files: [exe, { kind: 'zip', file: 'Teachouse.zip', sha256: 'x' }],
+				store: null
+			},
+			macos: { version: '0.2.0', files: [{ kind: 'dmg', file: 'Teachouse.dmg' }] },
+			// Files with no version are not offered: the card would print none.
+			linux: { files: [{ kind: 'appimage', file: 'Teachouse.AppImage', sha256: 'def' }] },
+			android: null
 		});
 		expect(held).toEqual({
 			version: '0.2.0',
-			windows: { file: 'teachouse-0.2.0.msi', sha256: 'abc' },
-			linux: { file: 'Teachouse_0.2.0_amd64.AppImage', sha256: 'def', version: '0.2.0' },
-			android: null,
-			apple: null
+			windows: { version: '0.2.0', updated: '2026-10-05T00:00:00Z', files: [exe], store: null },
+			macos: null,
+			linux: null,
+			android: null
 		});
 	});
 
@@ -70,12 +77,28 @@ describe('reading the download manifest', () => {
 		for (const file of escaping) {
 			const held = readManifest({
 				version: '0.2.0',
-				windows: { file, sha256: 'abc' },
-				android: null,
-				apple: null
+				windows: { version: '0.2.0', files: [{ kind: 'exe', file, sha256: 'abc' }] }
 			});
 			expect(held?.windows, file).toBeNull();
 		}
+	});
+
+	it('keeps a store link only where it is that platform’s own store, over https', () => {
+		const listing = (platform: string, store: string) =>
+			readManifest({ version: '0.2.0', [platform]: { files: [], store } });
+		expect(
+			listing('android', 'https://play.google.com/store/apps/details?id=io.teachouse.desktop')
+				?.android?.store
+		).toBe('https://play.google.com/store/apps/details?id=io.teachouse.desktop');
+		expect(listing('android', 'http://play.google.com/x')?.android).toBeNull();
+		expect(listing('android', 'https://apps.microsoft.com/detail/9n')?.android).toBeNull();
+		expect(listing('windows', 'https://apps.microsoft.com/detail/9n')?.windows?.store).toBe(
+			'https://apps.microsoft.com/detail/9n'
+		);
+		expect(listing('macos', 'https://apps.apple.com/app/id1')?.macos?.store).toBe(
+			'https://apps.apple.com/app/id1'
+		);
+		expect(listing('linux', 'https://flathub.org/apps/x')?.linux).toBeNull();
 	});
 });
 

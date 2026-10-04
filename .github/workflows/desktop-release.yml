@@ -1,5 +1,13 @@
-# Tagged Windows, Linux and Android releases, distributed through GitHub and
-# CrabNebula Cloud. Release prerequisites: docs/notes/design/desktop-distribution.md.
+# Tagged releases for every platform, built, signed and published on one tag:
+# Windows (NSIS + MSI, and the Microsoft Store), macOS (a universal Developer
+# ID app and disk image, and the Mac App Store), Linux (AppImage + .deb) and
+# Android (a sideload APK, and an AAB for Google Play). Distributed through
+# GitHub, CrabNebula Cloud and the download mirror.
+#
+# The jobs, and the secrets that gate each, are in
+# docs/notes/runbooks/release.md; the design is
+# docs/notes/design/desktop-distribution.md. A platform whose secrets are
+# absent is skipped and the run summary says which secret was missing.
 name: desktop-release
 
 # A tag on this repository is the only trigger. There is no workflow_dispatch,
@@ -20,11 +28,13 @@ concurrency:
 env:
   # The same CLI the dev shell carries (nixpkgs cargo-tauri 2.11.4), so a
   # release bundles with the version local builds were exercised against.
+  # Reusable workflows do not inherit `env`, so each receives it as an input.
   TAURI_CLI_VERSION: "2.11.4"
 
 jobs:
-  # Refuse the release before anything is built: seconds here rather than a
-  # Windows runner's minutes, and the same script `just release-check` runs.
+  # Refuse the release before anything is built — seconds here rather than a
+  # Windows runner's minutes, and the same script `just release-check` runs —
+  # and decide which platforms this tag can sign.
   verify:
     if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
@@ -32,16 +42,46 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.check.outputs.version }}
-      android: ${{ steps.android.outputs.enabled }}
+      tauri-cli-version: ${{ steps.check.outputs.tauri-cli-version }}
+      windows_signing: ${{ steps.plan.outputs.windows_signing }}
+      macos: ${{ steps.plan.outputs.macos }}
+      macos_notary: ${{ steps.plan.outputs.macos_notary }}
+      mac_app_store: ${{ steps.plan.outputs.mac_app_store }}
+      android: ${{ steps.plan.outputs.android }}
+      play: ${{ steps.plan.outputs.play }}
+      store_installer: ${{ steps.plan.outputs.store_installer }}
+      msstore: ${{ steps.plan.outputs.msstore }}
     env:
       # `secrets` is not a context an `if:` may read, but a job-level `env:`
-      # may, so the question is answered once here and reaches the Android job
-      # as an output. Without it that job would spend twenty minutes of a tag
-      # building an APK it could not sign and would not publish.
-      ANDROID_SIGNING: >-
-        ${{ secrets.ANDROID_KEY_ALIAS != ''
-        && secrets.ANDROID_KEY_PASSWORD != ''
+      # may, so each question is answered once here as a boolean and reaches
+      # the jobs that need it as an output.
+      HAS_AZURE_SIGNING: >-
+        ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != ''
+        && secrets.AZURE_TENANT_ID != '' }}
+      HAS_PFX_SIGNING: >-
+        ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+      HAS_APPLE_CERT: >-
+        ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+      HAS_APPLE_ID: >-
+        ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      HAS_APPLE_API_KEY: >-
+        ${{ secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != ''
+        && secrets.APPLE_API_KEY_P8 != '' }}
+      HAS_APP_STORE: >-
+        ${{ secrets.APPLE_APP_STORE_CERTIFICATE != ''
+        && secrets.APPLE_APP_STORE_CERTIFICATE_PASSWORD != ''
+        && secrets.APPLE_APP_STORE_PROVISIONING_PROFILE != ''
+        && secrets.APPLE_TEAM_ID != '' }}
+      HAS_ANDROID: >-
+        ${{ secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != ''
         && secrets.ANDROID_KEY_BASE64 != '' }}
+      HAS_PLAY: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
+      HAS_MSSTORE: >-
+        ${{ secrets.MSSTORE_TENANT_ID != '' && secrets.MSSTORE_CLIENT_ID != ''
+        && secrets.MSSTORE_CLIENT_SECRET != '' && secrets.MSSTORE_SELLER_ID != ''
+        && secrets.MSSTORE_PRODUCT_ID != '' }}
+      PLAY_TRACK: ${{ vars.PLAY_TRACK }}
+      MSSTORE_PUBLISHER: ${{ vars.MSSTORE_PUBLISHER }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,10 +90,12 @@ jobs:
         id: check
         env:
           TAG: ${{ github.ref_name }}
+          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
         run: |
           set -euo pipefail
           bash .github/scripts/release-check.sh "$TAG"
           printf 'version=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+          printf 'tauri-cli-version=%s\n' "$CLI_VERSION" >> "$GITHUB_OUTPUT"
       # A release built without this carries no entitlement key at all, so it
       # verifies no token and every seller's gate answers no. It is a repository
       # variable rather than a secret because a public key is not one, and
@@ -92,17 +134,11 @@ jobs:
           fi
           echo "entitlement public key present and well formed"
 
-      - name: decide whether an APK can ship
-        id: android
-        run: |
-          set -euo pipefail
-          printf 'enabled=%s\n' "$ANDROID_SIGNING" >> "$GITHUB_OUTPUT"
-          if [ "$ANDROID_SIGNING" != "true" ]; then
-            echo "::notice::the Android APK is skipped: ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD and ANDROID_KEY_BASE64 are not all set"
-            echo 'The Android APK was skipped because no signing key is configured.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: decide which platforms this tag can sign
+        id: plan
+        run: bash .github/scripts/release-plan.sh >> "$GITHUB_OUTPUT"
 
-  # The draft both build jobs upload into. Version comes from the Tauri config
+  # The draft every build job uploads into. Version comes from the Tauri config
   # through --framework, so the Cloud and the tree cannot disagree. `draft` is
   # the only verb that takes notes: `upload` and `publish` have no such flag,
   # so a release that drafts without them carries `"notes":""` for ever, which
@@ -188,546 +224,85 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Android is a sideload channel rather than an update channel. The Cloud
-  # publishes no Android platform identifier — neither its public-platform nor
-  # its update-platform list has one — so the APK goes up as a generic asset,
-  # which is the documented form for anything platform-independent, and it is
-  # served from the CDN by file name. `tauri-plugin-updater` declares Android
-  # support level "none" besides, so there is no in-app updater to point
-  # anywhere. Sources are in docs/notes/design/android-client.md.
-  #
-  # The job runs only when all three signing secrets exist. An unsigned APK
-  # cannot be installed, so building one costs twenty minutes of every tag and
-  # produces nothing shippable; `verify` answers that question and the run
-  # summary says so when the answer is no. Setting the secrets is the only
-  # change needed to make the next tag carry an APK.
-  android:
-    needs: [verify, draft, console]
-    if: ${{ !github.event.repository.fork && needs.verify.outputs.android == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: console
-          path: web/build
-
-      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # `flake.nix` owns the NDK version and this reads it, so a runner build
-      # and a local one compile against one toolchain rather than two.
-      - name: read the pinned Android toolchain
-        id: pins
-        run: sh .github/scripts/android-pins.sh >> "$GITHUB_OUTPUT"
-
-      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-        with:
-          packages: >-
-            platform-tools
-            platforms;android-36
-            build-tools;35.0.0
-            ndk;${{ steps.pins.outputs.ndk }}
-
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          # rust-toolchain.toml carries aarch64-linux-android alone, because
-          # `just check-portable` proves one triple per surface; the universal
-          # APK also needs x86_64.
-          target: x86_64-linux-android
-          cache: true
-
-      # An Android build needs the cargo subcommand, not the npm binary. Tauri's
-      # generated Gradle plugin runs `cargo tauri android android-studio-script`
-      # with the executable hardcoded as `cargo` and no property to override it
-      # (gen/android/buildSrc/src/main/java/io/teachouse/desktop/kotlin/BuildTask.kt,
-      # lines 19 and 51), so `cargo-tauri` has to be on the runner however this
-      # file invokes the CLI. binstall fetches Tauri's own published binary for
-      # the pinned version rather than compiling the crate, which is seconds
-      # rather than minutes; it falls back to compiling if the download fails.
-      - uses: cargo-bins/cargo-binstall@75b4bfae1b2c753a6806bbce6e6cb89b602de33c # v1.22.0
-      - name: install the Tauri CLI
-        env:
-          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
-        run: |
-          set -euo pipefail
-          # `--force`: the restored cargo cache can carry binstall's record of
-          # the install without the binary, and the record alone made the
-          # 0.8.0 run skip the download and fail on `cargo tauri`.
-          cargo binstall --no-confirm --locked --force "tauri-cli@$CLI_VERSION"
-          cargo tauri --version
-
-      - name: point the build at the pinned NDK
-        env:
-          NDK_VERSION: ${{ steps.pins.outputs.ndk }}
-        run: |
-          set -euo pipefail
-          ndk="$ANDROID_HOME/ndk/$NDK_VERSION"
-          if [ ! -d "$ndk" ]; then
-            echo "the pinned NDK $NDK_VERSION is not at $ndk after setup-android" >&2
-            ls -1 "$ANDROID_HOME/ndk" >&2 || true
-            exit 1
-          fi
-          printf 'NDK_HOME=%s\n' "$ndk" >> "$GITHUB_ENV"
-          printf 'ANDROID_NDK_ROOT=%s\n' "$ndk" >> "$GITHUB_ENV"
-
-      - name: set up release signing
-        env:
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-        run: |
-          set -euo pipefail
-          keystore="$RUNNER_TEMP/keystore.jks"
-          printf '%s' "$ANDROID_KEY_BASE64" | base64 -d > "$keystore"
-          chmod 600 "$keystore"
-          properties=apps/desktop/src-tauri/gen/android/keystore.properties
-          {
-            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
-            printf 'password=%s\n' "$ANDROID_KEY_PASSWORD"
-            printf 'storeFile=%s\n' "$keystore"
-          } > "$properties"
-          chmod 600 "$properties"
-          echo "release signing is configured"
-
-      # Every 64-bit ABI in one universal APK rather than arm64 alone: the
-      # tablet and the phone are arm64, and a Chromebook or an x86_64 emulator
-      # then installs the same file the seller downloads. 32-bit ARM is not
-      # buildable: tam-limits refuses a target whose usize is narrower than its
-      # u64 byte bounds at compile time. `--split-per-abi` is not passed, so
-      # Gradle emits one `app-universal-release.apk` with both `lib/` directories.
-      - name: build the APK
-        working-directory: apps/desktop
-        env:
-          # The key this build verifies entitlement tokens against. The verify
-          # job has already refused the tag if it is unset or malformed.
-          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
-        run: |
-          set -euo pipefail
-          cargo tauri android build --apk --ci --target aarch64 --target x86_64
-
-      # Gradle names an unsigned build `...-release-unsigned.apk`, so matching
-      # `*-universal-release.apk` alone is the check that signing actually
-      # happened and that the universal APK was the one built: a keystore that
-      # failed to apply, or a per-ABI split, fails here instead of shipping an
-      # APK somebody's device cannot install. The certificate digest printed is
-      # public -- it is what `apksigner` prints for any downloaded copy -- and it
-      # is the value to compare when a device answers "App not installed".
-      - name: collect the APK and its checksum
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-        run: |
-          set -euo pipefail
-          outputs=apps/desktop/src-tauri/gen/android/app/build/outputs/apk
-          mkdir -p android-artifacts
-          apk=$(find "$outputs" -type f -name '*-universal-release.apk' | head -1)
-          if [ -z "$apk" ]; then
-            echo "no signed universal release APK under $outputs" >&2
-            find "$outputs" -type f -name '*.apk' >&2 || true
-            exit 1
-          fi
-          for abi in arm64-v8a x86_64; do
-            if ! unzip -l "$apk" | grep -q " lib/$abi/libtam_desktop.so$"; then
-              echo "the universal APK carries no lib/$abi/libtam_desktop.so" >&2
-              unzip -l "$apk" | grep ' lib/' >&2 || true
-              exit 1
-            fi
-          done
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" \
-            | grep -E 'certificate (DN|SHA-256 digest)'
-          cp "$apk" "android-artifacts/Teachouse_${VERSION}_universal.apk"
-          ( cd android-artifacts && sha256sum -- *.apk > SHA256SUMS-android.txt )
-          ls -l android-artifacts
-          cat android-artifacts/SHA256SUMS-android.txt
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: android-universal
-          path: android-artifacts
-          if-no-files-found: error
-          retention-days: 30
-
-      # No platform flags: the Cloud has no Android identifier, and an asset
-      # uploaded without one is served as a generic asset.
-      - name: upload the APK to CrabNebula Cloud
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
-            --file android-artifacts/Teachouse_${{ needs.verify.outputs.version }}_universal.apk
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
-
-  # The Linux desktop: an AppImage the download card links and a .deb the
-  # GitHub release carries beside it. Neither is an update payload — the
-  # updater is configured for Windows alone — so nothing here is signed with
-  # the updater key and no update platform is named. ubuntu-22.04 rather than
-  # latest because an AppImage links against the glibc of the machine that
-  # built it, and the older the runner the more machines it runs on.
-  linux:
-    needs: [verify, draft, console]
-    if: ${{ !github.event.repository.fork }}
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: console
-          path: web/build
-      # The action defaults RUSTFLAGS to -D warnings, and an empty input reads as unset; the
-      # vendored wry is a path crate whose webkit2gtk deprecations cargo does not cap for us
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          cache: true
-          rustflags: "--cap-lints=warn"
-      - name: install the webkit and bundling dependencies
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: install the Tauri CLI
-        env:
-          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
-        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
-
-      # The same overlay the Windows job composes, minus signing: the updater
-      # endpoint is baked in so a Linux build asks the same channel, even
-      # though no Linux update payload is published yet.
-      - name: compose the release configuration overlay
-        env:
-          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
-          CN_CHANNEL: ${{ vars.CN_CHANNEL }}
-        run: |
-          set -euo pipefail
-          endpoint="https://cdn.crabnebula.app/update/$CN_APPLICATION/{{target}}-{{arch}}/{{current_version}}"
-          if [ -n "${CN_CHANNEL:-}" ]; then
-            endpoint="$endpoint?channel=$CN_CHANNEL"
-          fi
-          jq -n --arg endpoint "$endpoint" \
-            '{plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
-          cat release.conf.json
-
-      - name: build the Linux bundles
-        working-directory: apps/desktop
-        env:
-          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
-        run: |
-          set -euo pipefail
-          tauri build --bundles deb,appimage --config ../../release.conf.json
-
-      - name: collect the bundles and their checksums
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-        run: |
-          set -euo pipefail
-          bundles=target/release/bundle
-          mkdir -p linux-artifacts
-          appimage=$(find "$bundles/appimage" -type f -name '*.AppImage' | head -1)
-          deb=$(find "$bundles/deb" -type f -name '*.deb' | head -1)
-          if [ -z "$appimage" ] || [ -z "$deb" ]; then
-            echo "no AppImage or .deb under $bundles" >&2
-            find "$bundles" -type f >&2 || true
-            exit 1
-          fi
-          cp "$appimage" "linux-artifacts/Teachouse_${VERSION}_amd64.AppImage"
-          cp "$deb" "linux-artifacts/Teachouse_${VERSION}_amd64.deb"
-          ( cd linux-artifacts && sha256sum -- *.AppImage *.deb > SHA256SUMS-linux.txt )
-          ls -l linux-artifacts
-          cat linux-artifacts/SHA256SUMS-linux.txt
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: linux-x86_64
-          path: linux-artifacts
-          if-no-files-found: error
-          retention-days: 30
-
-      # Public platforms only: the Cloud's download page and CDN serve these
-      # by slug, and neither is an update payload. The slugs are the Cloud's
-      # own for Linux, `appimage-$arch` and `deb-$arch`.
-      - name: upload the AppImage to CrabNebula Cloud
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
-            --file linux-artifacts/Teachouse_${{ needs.verify.outputs.version }}_amd64.AppImage
-            --public-platform appimage-x86_64
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
-      - name: upload the .deb to CrabNebula Cloud
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
-            --file linux-artifacts/Teachouse_${{ needs.verify.outputs.version }}_amd64.deb
-            --public-platform deb-x86_64
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
-
   windows:
     needs: [verify, draft, console]
     if: ${{ !github.event.repository.fork }}
-    runs-on: windows-latest
     permissions:
       contents: read
-      # Provenance attestation only; inert while this repository is private.
       id-token: write
       attestations: write
-    defaults:
-      run:
-        shell: bash
-    env:
-      # `secrets` is not a context a step-level `if:` may read, so the one
-      # question the steps ask of it is answered once, here, as a boolean.
-      SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: console
-          path: web/build
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          cache: true
-      - name: install the Tauri CLI
-        env:
-          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
-        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      tauri-cli-version: ${{ needs.verify.outputs.tauri-cli-version }}
+      signing: ${{ needs.verify.outputs.windows_signing }}
+      store: ${{ needs.verify.outputs.store_installer == 'true' }}
+    secrets: inherit
 
-      # Signing is an overlay rather than a field in tauri.conf.json, so that
-      # `just desktop-build-windows` keeps working with no key and no Azure
-      # account, and so that createUpdaterArtifacts is true for a release and
-      # false everywhere else. Tauri merges --config over the base file.
-      #
-      # The updater endpoint is composed here too, because a binary must poll
-      # the channel it was published to and only this job knows which that is.
-      # The merge is RFC 7396, so the one-element endpoints array replaces the
-      # base file's rather than appending to it.
-      #
-      # The signtool invocation and the metadata file are Microsoft's, from
-      # learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations.
-      # Neither has been executed here: no Azure account exists.
-      - name: install the Artifact Signing client tools
-        if: ${{ env.SIGNING == 'true' }}
-        shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile ArtifactSigningClientTools.msi
-          Start-Process msiexec.exe -Wait -ArgumentList '/I ArtifactSigningClientTools.msi /quiet'
-          Remove-Item ArtifactSigningClientTools.msi
-      - name: compose the release configuration overlay
-        id: overlay
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
-          CN_CHANNEL: ${{ vars.CN_CHANNEL }}
-        run: |
-          set -euo pipefail
-          # An empty channel is not the production channel: `?channel=` is a
-          # 404, so an unset CN_CHANNEL must drop the parameter entirely.
-          endpoint="https://cdn.crabnebula.app/update/$CN_APPLICATION/{{target}}-{{arch}}/{{current_version}}"
-          if [ -n "${CN_CHANNEL:-}" ]; then
-            endpoint="$endpoint?channel=$CN_CHANNEL"
-          fi
-          echo "updater endpoint: $endpoint"
-          if [ "$SIGNING" != "true" ]; then
-            echo "::warning::AZURE_CLIENT_ID is unset; this release will be unsigned and SmartScreen will show no publisher name"
-            jq -n --arg endpoint "$endpoint" \
-              '{bundle: {createUpdaterArtifacts: true},
-                plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
-            cat release.conf.json
-            exit 0
-          fi
-          for name in AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE; do
-            eval "value=\${$name}"
-            if [ -z "$value" ]; then
-              echo "signing secrets are set but the $name repository variable is not" >&2
-              exit 1
-            fi
-          done
-          jq -n \
-            --arg endpoint "$AZURE_SIGNING_ENDPOINT" \
-            --arg account "$AZURE_SIGNING_ACCOUNT" \
-            --arg profile "$AZURE_SIGNING_PROFILE" \
-            '{Endpoint: $endpoint, CodeSigningAccountName: $account, CertificateProfileName: $profile,
-              ExcludeCredentials: ["ManagedIdentityCredential","WorkloadIdentityCredential",
-                "SharedTokenCacheCredential","VisualStudioCredential","VisualStudioCodeCredential",
-                "AzureCliCredential","AzurePowerShellCredential","AzureDeveloperCliCredential",
-                "InteractiveBrowserCredential"]}' > "$RUNNER_TEMP/signing-metadata.json"
-          dlib=$(find "/c/Program Files" "/c/Program Files (x86)" -name 'Azure.CodeSigning.Dlib.dll' -path '*x64*' 2>/dev/null | head -1)
-          signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -name 'signtool.exe' -path '*x64*' 2>/dev/null | sort | tail -1)
-          if [ -z "$dlib" ] || [ -z "$signtool" ]; then
-            echo "could not locate Azure.CodeSigning.Dlib.dll or signtool.exe after installing the client tools" >&2
-            exit 1
-          fi
-          # A three-day certificate validity makes the timestamp mandatory
-          # rather than advisory; the authority is Microsoft's own.
-          command=$(printf '"%s" sign /v /debug /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib "%s" /dmdf "%s" %%1' \
-            "$(cygpath -w "$signtool")" "$(cygpath -w "$dlib")" "$(cygpath -w "$RUNNER_TEMP/signing-metadata.json")")
-          jq -n --arg cmd "$command" --arg endpoint "$endpoint" \
-            '{bundle: {createUpdaterArtifacts: true, windows: {signCommand: $cmd}},
-              plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
-          cat release.conf.json
+  macos:
+    needs: [verify, draft, console]
+    if: ${{ !github.event.repository.fork && needs.verify.outputs.macos == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-macos.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      tauri-cli-version: ${{ needs.verify.outputs.tauri-cli-version }}
+      notary: ${{ needs.verify.outputs.macos_notary }}
+    secrets: inherit
 
-      - name: build the Windows bundles
-        working-directory: apps/desktop
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # The key this build verifies entitlement tokens against, embedded by
-          # the crate's build script. The verify job has already refused the
-          # tag if it is unset or malformed.
-          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY is unset; the updater artifacts could not be signed" >&2
-            exit 1
-          fi
-          tauri build --bundles nsis,msi --config ../../release.conf.json
+  # Independent of every other job's outcome and of the Cloud: the store
+  # build goes to App Store Connect and nowhere else.
+  mac-app-store:
+    needs: [verify, console]
+    if: ${{ !github.event.repository.fork && needs.verify.outputs.mac_app_store == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-mac-app-store.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      tauri-cli-version: ${{ needs.verify.outputs.tauri-cli-version }}
+    secrets: inherit
 
-      - name: collect the artefacts, their checksums and a fallback manifest
-        id: collect
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-          UPDATER_BASE_URL: ${{ vars.UPDATER_BASE_URL }}
-        run: |
-          set -euo pipefail
-          bundle=target/release/bundle
-          out=release-artifacts
-          mkdir -p "$out"
-          find "$bundle/nsis" "$bundle/msi" -type f \
-            \( -name '*.exe' -o -name '*.msi' -o -name '*.sig' \) -exec cp {} "$out/" \;
-          ls -l "$out"
+  linux:
+    needs: [verify, draft, console]
+    if: ${{ !github.event.repository.fork }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-linux.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      tauri-cli-version: ${{ needs.verify.outputs.tauri-cli-version }}
+    secrets: inherit
 
-          ( cd "$out" && sha256sum -- *.exe *.msi > SHA256SUMS.txt )
-          cat "$out/SHA256SUMS.txt"
+  android:
+    needs: [verify, draft, console]
+    if: ${{ !github.event.repository.fork && needs.verify.outputs.android == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-android.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      tauri-cli-version: ${{ needs.verify.outputs.tauri-cli-version }}
+      play: ${{ needs.verify.outputs.play == 'true' }}
+    secrets: inherit
 
-          # The NSIS installer is the update payload: it is the one Tauri's
-          # Windows installMode drives without an elevation prompt.
-          set -- "$out"/*-setup.exe
-          if [ ! -f "$1" ]; then
-            echo "no NSIS installer in $out" >&2
-            exit 1
-          fi
-          setup=$(basename "$1")
-          signature=$(cat "$out/$setup.sig")
-          if [ -n "$UPDATER_BASE_URL" ]; then
-            url="${UPDATER_BASE_URL%/}/$setup"
-            note="Fallback manifest. The live endpoint is CrabNebula Cloud, which serves updates dynamically."
-          else
-            url="$setup"
-            note="Fallback manifest with no host: UPDATER_BASE_URL is unset, so url is a bare filename. The live endpoint is CrabNebula Cloud, which serves updates dynamically."
-          fi
-          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                --arg s "$signature" --arg u "$url" --arg n "$note" \
-            '{version: $v, notes: $n, pub_date: $d,
-              platforms: {"windows-x86_64": {signature: $s, url: $u}}}' > "$out/latest.json"
-          cat "$out/latest.json"
-          printf 'dir=%s\n' "$out" >> "$GITHUB_OUTPUT"
-
-      # Cryptographic provenance for the artefacts. GitHub gates attestations
-      # in private repositories behind Enterprise Cloud, so this is inert here
-      # and becomes live unchanged if the repository is made public. The
-      # checksums above and the minisign .sig files are what works today.
-      - name: attest build provenance
-        if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            release-artifacts/*.exe
-            release-artifacts/*.msi
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-x86_64
-          path: release-artifacts
-          if-no-files-found: error
-          retention-days: 30
-
-      # `--framework tauri` reads the version from the Tauri config and then
-      # looks for the bundles beneath that config. This crate is a member of
-      # the root Cargo workspace, so cargo writes them to the workspace root
-      # instead and the discovery finds nothing (run 33730896941). Naming each
-      # file is also what the CLI documents as the way to avoid uploading a
-      # stale bundle a cached target directory left behind. The version
-      # positional replaces what `--framework` would have read, and the verify
-      # job has already checked it against the tag and against the config.
-      - name: resolve the bundle paths for the upload
-        id: bundles
-        env:
-          DIR: ${{ steps.collect.outputs.dir }}
-        run: |
-          set -euo pipefail
-          set -- "$DIR"/*-setup.exe
-          if [ ! -f "$1" ]; then
-            echo "no NSIS installer in $DIR" >&2
-            exit 1
-          fi
-          printf 'nsis=%s\n' "$1" >> "$GITHUB_OUTPUT"
-          printf 'nsis_signature=%s\n' "$1.sig" >> "$GITHUB_OUTPUT"
-          set -- "$DIR"/*.msi
-          if [ ! -f "$1" ]; then
-            echo "no MSI installer in $DIR" >&2
-            exit 1
-          fi
-          printf 'msi=%s\n' "$1" >> "$GITHUB_OUTPUT"
-
-      # The NSIS installer is the update payload, so it alone carries an
-      # update platform and a signature; the MSI is a download only.
-      - name: upload the NSIS installer to CrabNebula Cloud
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
-            --file ${{ steps.bundles.outputs.nsis }}
-            --signature ${{ steps.bundles.outputs.nsis_signature }}
-            --update-platform windows-x86_64 --public-platform nsis-x86_64
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
-
-      - name: upload the MSI installer to CrabNebula Cloud
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
-            --file ${{ steps.bundles.outputs.msi }} --public-platform wix-x86_64
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
-
-  # The same release on GitHub: the installers, the updater signatures, the
-  # checksums and the notes the Cloud was given. `latest.json` goes too,
-  # because it is the hosting escape hatch the design note describes and the
-  # workflow artefact it otherwise lives in expires after thirty days.
-  # The APK and the Linux bundles are additive: this runs on a successful
-  # Windows build whatever Android and Linux did, and attaches each only if
-  # there is one. A skipped or failed `needs` would otherwise skip this job,
-  # which is why the condition uses a status function and then names the one
-  # result it actually requires.
+  # The same release on GitHub: every platform's artefacts, their updater
+  # signatures, one SHA256SUMS.txt over all of them, the static updater
+  # manifest, and the notes the Cloud was given. The download mirror reads
+  # this release, so this is also what reaches teachouse.io/downloads/.
+  #
+  # Windows is the one platform a release requires: it is what the installed
+  # base updates from. Every other platform is additive — it is attached when
+  # its job succeeded and the summary says why when it did not. A skipped or
+  # failed `needs` would otherwise skip this job, which is why the condition
+  # uses a status function and then names the one result it requires.
   github-release:
-    needs: [verify, windows, android, linux]
+    needs: [verify, windows, macos, mac-app-store, linux, android]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
       && needs.windows.result == 'success' }}
@@ -741,45 +316,75 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-x86_64
-          path: release-artifacts
+          path: release
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: ${{ needs.android.result == 'success' }}
+        if: ${{ needs.macos.result == 'success' }}
         with:
-          name: android-universal
-          path: android-artifacts
+          name: macos-universal
+          path: release
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: ${{ needs.linux.result == 'success' }}
         with:
           name: linux-x86_64
-          path: linux-artifacts
-      - name: say whether the APK is in this release
+          path: release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ needs.android.result == 'success' }}
+        with:
+          name: android-universal
+          path: release
+
+      # What each platform job came to, beside the plan the verify job wrote:
+      # skipped means its secrets were absent, anything else is worth a look.
+      - name: say what this release carries
         env:
-          ANDROID_RESULT: ${{ needs.android.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          WINDOWS_SIGNING: ${{ needs.verify.outputs.windows_signing }}
+          MACOS: ${{ needs.macos.result }}
+          MAC_APP_STORE: ${{ needs.mac-app-store.result }}
+          LINUX: ${{ needs.linux.result }}
+          ANDROID: ${{ needs.android.result }}
+          PLAY: ${{ needs.verify.outputs.play }}
         run: |
           set -euo pipefail
-          case "$ANDROID_RESULT" in
-            success)
-              echo 'The Android APK is attached to this release.' >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            skipped)
-              echo 'No Android APK in this release: the Android job was skipped because no signing key is configured. The desktop release is unaffected.' >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "No Android APK in this release: the Android job finished as $ANDROID_RESULT. The desktop release is unaffected." >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::no Android APK in this release: the android job finished as $ANDROID_RESULT"
-              ;;
-          esac
-      - name: say whether the Linux bundles are in this release
+          line() {
+            local name=$1 result=$2 carried=$3
+            case "$result" in
+              success) echo "| $name | $carried |" ;;
+              skipped) echo "| $name | skipped: its secrets are not set (see the release plan above) |" ;;
+              *) echo "| $name | **$result** |"; echo "::warning::$name finished as $result" >&2 ;;
+            esac
+          }
+          {
+            echo "### What this release carries"
+            echo
+            echo "| Platform | Result |"
+            echo "| --- | --- |"
+            line "Windows" "$WINDOWS" "NSIS + MSI ($WINDOWS_SIGNING signing) on GitHub and the Cloud"
+            line "macOS" "$MACOS" "universal dmg + updater archive on GitHub and the Cloud"
+            line "Mac App Store" "$MAC_APP_STORE" "uploaded to App Store Connect"
+            line "Linux" "$LINUX" "AppImage + deb on GitHub and the Cloud"
+            if [ "$PLAY" = true ]; then
+              line "Android" "$ANDROID" "APK on GitHub and the Cloud; AAB uploaded to Google Play"
+            else
+              line "Android" "$ANDROID" "APK on GitHub and the Cloud; no Google Play upload"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The AAB installs from Play alone, so it is not a release asset.
+      - name: write the checksums and the updater manifest
         env:
-          LINUX_RESULT: ${{ needs.linux.result }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          UPDATER_BASE_URL: ${{ vars.UPDATER_BASE_URL }}
         run: |
           set -euo pipefail
-          if [ "$LINUX_RESULT" = success ]; then
-            echo 'The Linux AppImage and .deb are attached to this release.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No Linux bundles in this release: the linux job finished as $LINUX_RESULT. The desktop release is unaffected." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::no Linux bundles in this release: the linux job finished as $LINUX_RESULT"
-          fi
+          rm -f release/*.aab
+          ( cd release && find . -maxdepth 1 -type f ! -name '*.sig' -printf '%f\0' \
+              | sort -z | xargs -0 sha256sum -- ) > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" release/SHA256SUMS.txt
+          cat release/SHA256SUMS.txt
+          bash .github/scripts/updater-manifest.sh "$VERSION" release "$UPDATER_BASE_URL" \
+            > release/latest.json
+          cat release/latest.json
 
       - name: create the GitHub release
         env:
@@ -794,34 +399,105 @@ jobs:
             echo "no release notes at $notes" >&2
             exit 1
           fi
-          assets=(release-artifacts/*)
-          if [ -d android-artifacts ]; then
-            assets+=(android-artifacts/*)
-          fi
-          if [ -d linux-artifacts ]; then
-            assets+=(linux-artifacts/*)
-          fi
           # A channelled release is a pre-release: a beta must not present
           # itself as the repository's latest release.
           flags=()
           if [ -n "${CN_CHANNEL:-}" ]; then
             flags+=(--prerelease)
           fi
-          printf 'attaching %s\n' "${assets[@]}"
+          ls -l release
           gh release create "$TAG" --title "$TAG" --notes-file "$notes" \
-            "${flags[@]}" "${assets[@]}"
+            "${flags[@]}" release/*
+
+  # The Microsoft Store installs EXE apps from a URL the publisher hosts, and
+  # fetches it again on every Store install, so the package URL must be a
+  # public, versioned, immutable file. The GitHub release is private; the
+  # download mirror is public, keeps the current Store installer and the one
+  # before it, and refreshes from the release above within one interval. This
+  # waits for the mirror to serve the exact bytes the Windows job built, then
+  # replaces the draft submission's package and submits it.
+  #
+  # The Store CLI rather than raw REST: Microsoft's own store-submission action
+  # is archived in its favour, and it covers EXE apps
+  # (https://github.com/microsoft/store-submission#migrating-to-the-msstore-cli).
+  # Tauri cannot build MSIX (tauri-apps/tauri#4818), so an EXE is the Store
+  # package Tauri documents (https://v2.tauri.app/distribute/microsoft-store/).
+  microsoft-store:
+    needs: [verify, github-release]
+    if: >-
+      ${{ !cancelled() && !github.event.repository.fork
+      && needs.verify.outputs.msstore == 'true' && needs.github-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      PACKAGE_BASE_URL: ${{ vars.MSSTORE_PACKAGE_BASE_URL || 'https://teachouse.io/downloads' }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-x86_64
+          path: windows
+      - name: wait for the download mirror to serve the Store installer
+        id: url
+        run: |
+          set -euo pipefail
+          name="Teachouse_${VERSION}_x64_store-setup.exe"
+          expected=$(sha256sum "windows/$name" | cut -d' ' -f1)
+          url="${PACKAGE_BASE_URL%/}/$name"
+          # Two refresh intervals of fifteen minutes and a margin.
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error --location --max-time 600 --output "$RUNNER_TEMP/store.exe" "$url"; then
+              actual=$(sha256sum "$RUNNER_TEMP/store.exe" | cut -d' ' -f1)
+              if [ "$actual" = "$expected" ]; then
+                echo "$url serves the installer the Windows job built"
+                printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "$url answers with different bytes ($actual, expected $expected)" >&2
+              exit 1
+            fi
+            echo "attempt $attempt: $url is not served yet"
+            sleep 60
+          done
+          echo "the download mirror did not serve $url within forty minutes; is the refresh running?" >&2
+          exit 1
+      - uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.3
+      # The package entry Partner Center needs for an EXE: silent install by
+      # NSIS's own `/S` (Tauri's Microsoft Store guide), x64 only, and a page
+      # documenting the installer's exit codes, which for NSIS is its manual.
+      - name: replace the draft submission's package and submit it
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+          MSSTORE_PRODUCT_ID: ${{ secrets.MSSTORE_PRODUCT_ID }}
+          PACKAGE_URL: ${{ steps.url.outputs.url }}
+          GENERIC_DOC_URL: ${{ vars.MSSTORE_GENERIC_DOC_URL || 'https://nsis.sourceforge.io/Docs/AppendixD.html' }}
+        run: |
+          set -euo pipefail
+          msstore settings --enableTelemetry false
+          msstore reconfigure --tenantId "$MSSTORE_TENANT_ID" --sellerId "$MSSTORE_SELLER_ID" \
+            --clientId "$MSSTORE_CLIENT_ID" --clientSecret "$MSSTORE_CLIENT_SECRET"
+          update=$(jq -cn --arg url "$PACKAGE_URL" --arg doc "$GENERIC_DOC_URL" \
+            '{packages: [{packageUrl: $url, languages: ["en-us"], architectures: ["X64"],
+                          isSilentInstall: false, installerParameters: "/S", genericDocUrl: $doc}]}')
+          msstore submission update "$MSSTORE_PRODUCT_ID" "$update"
+          msstore submission publish "$MSSTORE_PRODUCT_ID"
+          echo "The Microsoft Store submission for $VERSION was sent for certification with $PACKAGE_URL." >> "$GITHUB_STEP_SUMMARY"
 
   # A draft nobody published serves no update, so this is the step that makes
   # the release real. A failed run leaves the draft unpublished on purpose;
   # `cn release purge` removes it.
-  # After the Android and Linux jobs as well as the Windows one, whatever
-  # their results: a published release is sealed, and the APK upload that
-  # arrived after the publish was refused with "already published" on the
-  # one run where the Android build outlasted the Windows one. The desktop
-  # release still goes out when Android or Linux fails; it just waits to be
-  # sure.
+  # After every job that uploads to the draft, whatever their results: a
+  # published release is sealed, and an upload that arrives after the publish
+  # is refused with "already published". The desktop release still goes out
+  # when another platform fails; it just waits to be sure.
   publish:
-    needs: [verify, windows, android, linux]
+    needs: [verify, windows, macos, linux, android]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
       && needs.windows.result == 'success' }}

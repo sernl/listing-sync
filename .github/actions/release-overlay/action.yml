@@ -1,0 +1,58 @@
+# The release configuration overlay every desktop job passes to `tauri build
+# --config`: updater artefacts on, the updater endpoint pointed at the channel
+# this release is published to, and whatever the job adds (a sign command, a
+# certificate thumbprint). An overlay rather than fields in tauri.conf.json,
+# so a local build needs no key and no account, and createUpdaterArtifacts is
+# true for a release and false everywhere else.
+#
+# Tauri merges --config with RFC 7396 JSON Merge Patch, under which an array
+# replaces the one it patches, so the one-element `endpoints` here supersedes
+# the base file's rather than appending to it. An empty CN_CHANNEL is not the
+# production channel: `?channel=` is a 404, so the parameter is dropped
+# entirely when the variable is unset.
+name: release-overlay
+description: Write release.conf.json at the workspace root for `tauri build --config`.
+inputs:
+  cn-application:
+    description: The CrabNebula org/app pair (the CN_APPLICATION variable).
+    required: true
+  cn-channel:
+    description: The CrabNebula channel (the CN_CHANNEL variable); empty for production.
+    required: false
+    default: ""
+  update-platform:
+    description: >-
+      The update-platform path segment, as tauri-plugin-updater templates it:
+      `{{target}}-{{arch}}`, or `{{target}}-{{arch}}-{{bundle_type}}` where one
+      platform ships two updatable bundles.
+    required: false
+    default: "{{target}}-{{arch}}"
+  patch:
+    description: A JSON object deep-merged over the overlay.
+    required: false
+    default: "{}"
+runs:
+  using: composite
+  steps:
+    - name: compose the release configuration overlay
+      shell: bash
+      env:
+        CN_APPLICATION: ${{ inputs.cn-application }}
+        CN_CHANNEL: ${{ inputs.cn-channel }}
+        UPDATE_PLATFORM: ${{ inputs.update-platform }}
+        PATCH: ${{ inputs.patch }}
+      run: |
+        set -euo pipefail
+        if [ -z "$CN_APPLICATION" ]; then
+          echo "the CN_APPLICATION repository variable is unset; it is the org/app pair" >&2
+          exit 1
+        fi
+        endpoint="https://cdn.crabnebula.app/update/$CN_APPLICATION/$UPDATE_PLATFORM/{{current_version}}"
+        if [ -n "$CN_CHANNEL" ]; then
+          endpoint="$endpoint?channel=$CN_CHANNEL"
+        fi
+        echo "updater endpoint: $endpoint"
+        jq -n --arg endpoint "$endpoint" --argjson patch "$PATCH" \
+          '{bundle: {createUpdaterArtifacts: true},
+            plugins: {updater: {endpoints: [$endpoint]}}} * $patch' > release.conf.json
+        cat release.conf.json
