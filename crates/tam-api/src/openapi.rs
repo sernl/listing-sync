@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 227] = [
+pub const ROUTES: [Route; 231] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -33,6 +33,11 @@ pub const ROUTES: [Route; 227] = [
         method: "post",
         path: "/internal/consent",
         summary: "Identity service: record a new account's sign-up agreement (shared secret)",
+    },
+    Route {
+        method: "post",
+        path: "/internal/abuse/screen",
+        summary: "Identity service: may this sign-up proceed (throwaway domain, sign-ups per address, suspended address; shared secret)",
     },
     Route {
         method: "get",
@@ -1108,6 +1113,21 @@ pub const ROUTES: [Route; 227] = [
         method: "put",
         path: "/{version}/admin/payments/settings",
         summary: "Operator: whether new refunds email the customer automatically",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/abuse/flags",
+        summary: "Operator: flagged organisations with score, shared signals and standing, the counters, and a search by email, address, shop, digest or name",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/abuse/orgs/{org}",
+        summary: "Operator: one organisation's abuse cluster: its flags, its signals and the organisations sharing them",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/abuse/flags/{id}/{action}",
+        summary: "Operator: dismiss, warn, limit or ban the organisation a flag names",
     },
     Route {
         method: "get",

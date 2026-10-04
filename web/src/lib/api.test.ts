@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { allPages, api, ApiFailure } from './api';
+import { allPages, api, ApiFailure, isSuspended } from './api';
 import { describeUnreachable } from './unreachable';
 
 afterEach(() => {
@@ -56,10 +56,16 @@ describe('a failing response whose body is not the error envelope', () => {
 
 describe('the api client', () => {
 	it('keeps an HTML success response distinct from a network failure', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => new Response('<!DOCTYPE html><p>private page</p>', {
-			status: 200,
-			headers: { 'content-type': 'text/html; charset=utf-8' }
-		})));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response('<!DOCTYPE html><p>private page</p>', {
+						status: 200,
+						headers: { 'content-type': 'text/html; charset=utf-8' }
+					})
+			)
+		);
 		const failure = await api.whoami().catch((caught: unknown) => caught);
 		expect(failure).toBeInstanceOf(ApiFailure);
 		expect(failure).toMatchObject({
@@ -90,8 +96,44 @@ describe('the api client', () => {
 		expect((failure as ApiFailure).code()).toBe('session_required');
 	});
 
+	it('tells a suspended account apart from a missing session', async () => {
+		const message = 'This account is suspended. Email contact@teachouse.io.';
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				jsonResponse(403, {
+					status: 403,
+					errors: [{ code: 'account_suspended', kind: 'unauthenticated', message }]
+				})
+			)
+		);
+		const failure = await api.exchange('token').catch((caught: unknown) => caught);
+		expect(isSuspended(failure)).toBe(true);
+		expect((failure as ApiFailure).message).toBe(message);
+		expect(
+			isSuspended(
+				new ApiFailure(401, {
+					status: 401,
+					errors: [{ code: 'session_required', kind: 'unauthenticated', message: 'no' }]
+				})
+			)
+		).toBe(false);
+		expect(
+			isSuspended(
+				new ApiFailure(403, {
+					status: 403,
+					errors: [{ code: 'resource_missing', message: 'no' }]
+				})
+			)
+		).toBe(false);
+		expect(isSuspended(new Error('account_suspended'))).toBe(false);
+	});
+
 	it('a body-less failure still throws with its status', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('', { status: 502 }))
+		);
 		const failure = await api.whoami().catch((caught: unknown) => caught);
 		expect((failure as ApiFailure).status).toBe(502);
 		expect((failure as ApiFailure).body).toBeNull();
@@ -207,7 +249,12 @@ class FakeUpload {
 	sentBody: unknown = null;
 	status = 0;
 	responseText = '';
-	upload = { listeners: new Map<string, (event: unknown) => void>(), addEventListener(kind: string, run: (event: unknown) => void) { this.listeners.set(kind, run); } };
+	upload = {
+		listeners: new Map<string, (event: unknown) => void>(),
+		addEventListener(kind: string, run: (event: unknown) => void) {
+			this.listeners.set(kind, run);
+		}
+	};
 	private listeners = new Map<string, () => void>();
 
 	constructor() {
@@ -397,9 +444,9 @@ describe('the authoring endpoints', () => {
 				})
 			)
 		);
-		const failure = await api.bindMapping('m1', 'https://www.tes.com/teaching-resource/x-1').catch(
-			(caught: unknown) => caught
-		);
+		const failure = await api
+			.bindMapping('m1', 'https://www.tes.com/teaching-resource/x-1')
+			.catch((caught: unknown) => caught);
 		expect((failure as ApiFailure).code()).toBe('listing_url_unusable');
 	});
 
@@ -422,7 +469,7 @@ describe('the authoring endpoints', () => {
 		]);
 	});
 
-	it('replaces an item\'s labels with the whole set, not a delta', async () => {
+	it("replaces an item's labels with the whole set, not a delta", async () => {
 		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
 		vi.stubGlobal(
 			'fetch',
@@ -515,10 +562,7 @@ describe('the authoring endpoints', () => {
 		);
 		await api.declareAuthorship('Tes', 'x');
 		await api.declareAuthorship('Etsy', 'x');
-		expect(seen).toEqual([
-			'/v1/connections/Tes/authorship',
-			'/v1/connections/Etsy/authorship'
-		]);
+		expect(seen).toEqual(['/v1/connections/Tes/authorship', '/v1/connections/Etsy/authorship']);
 	});
 
 	it('tells an undeclared connection apart from one whose surface serves none', async () => {

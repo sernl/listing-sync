@@ -162,6 +162,11 @@ export const queryKeys = {
 	 *  opens. Its own key: invalidating the ledger should not requote a
 	 *  panel that is closing. */
 	adminRefundQuote: (charge: string) => ['admin-refund-quote', charge] as const,
+	/** Every page of the Abuse list, whatever its filter, under one prefix so
+	 *  an action refreshes them all. */
+	adminAbuse: ['admin-abuse'] as const,
+	adminAbuseFlags: (state: string, q: string) => ['admin-abuse', state, q] as const,
+	adminAbuseOrg: (org: string) => ['admin-abuse-org', org] as const,
 	adminSiteAnalytics: (range: string) => ['admin-site-analytics', range] as const,
 	/** One page of the identity plane's user list, keyed by the search, the
 	 *  page and the order that produced it. */

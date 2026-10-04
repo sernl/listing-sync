@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO abuse_flag (id, org_id, kind, score, reason, created_at)\n               SELECT gen_random_uuid(), c.org_id, $3, $4,\n                      'Shares ' || $5 || ' with ' || c.others\n                        || CASE WHEN c.others = 1 THEN ' other account.' ELSE ' other accounts.' END,\n                      $6\n                 FROM (SELECT a.org_id,\n                              count(DISTINCT b.org_id) AS others,\n                              max(GREATEST(a.first_seen, b.first_seen)) AS evidence_at\n                         FROM account_link_signal a\n                         JOIN account_link_signal b\n                           ON b.kind = a.kind AND b.value_hash = a.value_hash\n                          AND b.org_id <> a.org_id\n                        WHERE a.kind = $1\n                          AND ($2::uuid IS NULL OR a.org_id = $2 OR b.org_id = $2)\n                        GROUP BY a.org_id) c\n                WHERE NOT EXISTS (\n                        SELECT 1 FROM abuse_flag f\n                         WHERE f.org_id = c.org_id AND f.kind = $3\n                           AND (f.resolved_at IS NULL OR f.resolved_at >= c.evidence_at))\n               ON CONFLICT (org_id, kind) WHERE resolved_at IS NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0b586de3180cf6379b6036faad518ea26697e77e02eb2f8329eaf289314a2f9"
+}

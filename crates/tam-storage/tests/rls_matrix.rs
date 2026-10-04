@@ -117,14 +117,23 @@ const TENANT_TABLES: [&str; 77] = [
 /// at sign-up (migration 0103): keyed on the identity subject, written before
 /// any organisation exists, and owned by no tenant. account_deletion is what a
 /// seller's own deletion leaves behind (migration 0104), written after their
-/// organisation is gone, so there is no tenant left to fence it by. The rest
-/// are genuinely global: reference data, the canonical taxonomy, the fleet
-/// kill switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 26] = [
+/// organisation is gone, so there is no tenant left to fence it by.
+/// account_link_signal, abuse_flag and banned_identity are abuse prevention
+/// (migrations 0105 and 0106): their whole purpose is the comparison across
+/// tenants, so a fence would hide exactly the rows the scorer reads; the
+/// first two carry org_id as a real column so an erasure still takes them,
+/// and banned_identity deliberately does not. storefront_grant_record is
+/// "this shop has had its five" with no organisation on it at all (0105).
+/// The rest are genuinely global: reference data, the canonical taxonomy, the
+/// fleet kill switch, and sqlx's migration bookkeeping.
+const GLOBAL_TABLES: [&str; 30] = [
     "_sqlx_migrations",
+    "abuse_flag",
     "account_consent",
     "account_deletion",
+    "account_link_signal",
     "app_user",
+    "banned_identity",
     "canonical_term",
     "discount",
     "discount_code",
@@ -146,6 +155,7 @@ const GLOBAL_TABLES: [&str; 26] = [
     "refund_request",
     "site_setting",
     "standards_node",
+    "storefront_grant_record",
     "user_session",
 ];
 

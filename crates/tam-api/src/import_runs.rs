@@ -4317,6 +4317,7 @@ fn claim_refusal(state: &AppState, error: &tam_storage::StorageError) -> APIErro
         | tam_storage::StorageError::StaleLease
         | tam_storage::StorageError::DuplicateIdempotencyKey { .. }
         | tam_storage::StorageError::StorefrontBoundElsewhere { .. }
+        | tam_storage::StorageError::StorefrontSuspended { .. }
         | tam_storage::StorageError::AttemptInFlight) => storage_fault(state, fault),
     }
 }

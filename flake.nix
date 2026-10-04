@@ -59,6 +59,8 @@
               || (builtins.match ".*/tests/fixtures/.*\\.zip" path != null)
               || (builtins.match ".*/docs/design/data/.*\\.jsonl?" path != null)
               || (builtins.match ".*/apps/extension/static/manifest\\.json" path != null)
+              # The sign-up screen's bundled throwaway-domain list (tam-api).
+              || (builtins.match ".*/crates/tam-api/data/.*\\.txt" path != null)
               # The verdict-fixtures bin and equivalence test in tam-core-wasm
               # include drafts.json and verdicts.json from outside src/.
               || (builtins.match ".*/crates/[^/]+/fixtures/.*\\.json" path != null);

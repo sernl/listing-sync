@@ -159,13 +159,22 @@ pub enum APIErrorCode {
     /// This deployment cannot ask devices for files: it holds no key to sign
     /// the ask with.
     StreamingUnavailable,
+    /// An operator suspended this organisation (migration 0106). Answered
+    /// with 403 on every authenticated route and on the session exchange, so
+    /// the console shows the suspension rather than sending the person back
+    /// to sign in.
+    AccountSuspended,
+    /// The identity service's sign-up screen refused a new account:
+    /// `detail.refusal` names why (`disposable_email`, `ip_velocity`,
+    /// `suspended`).
+    SignupRefused,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 34] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -197,6 +206,8 @@ impl APIErrorCode {
         Self::ConsentRequired,
         Self::DeviceOffline,
         Self::StreamingUnavailable,
+        Self::AccountSuspended,
+        Self::SignupRefused,
         Self::Internal,
     ];
 
@@ -234,6 +245,8 @@ impl APIErrorCode {
             Self::ConsentRequired => "consent_required",
             Self::DeviceOffline => "device_offline",
             Self::StreamingUnavailable => "streaming_unavailable",
+            Self::AccountSuspended => "account_suspended",
+            Self::SignupRefused => "signup_refused",
             Self::Internal => "internal",
         }
     }
@@ -472,6 +485,8 @@ mod tests {
                 | APIErrorCode::ConsentRequired
                 | APIErrorCode::DeviceOffline
                 | APIErrorCode::StreamingUnavailable
+                | APIErrorCode::AccountSuspended
+                | APIErrorCode::SignupRefused
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

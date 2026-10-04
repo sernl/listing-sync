@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.id AS \"org!\", o.name AS \"name!\", o.slug,\n                      COALESCE(sum(f.score) FILTER (WHERE f.resolved_at IS NULL), 0)::bigint\n                                                                          AS \"score!\",\n                      COALESCE(array_agg(DISTINCT f.kind) FILTER (WHERE f.resolved_at IS NULL),\n                               '{}')                                      AS \"open_kinds!\",\n                      array_agg(DISTINCT f.kind)                          AS \"all_kinds!\",\n                      count(*) FILTER (WHERE f.resolved_at IS NULL)       AS \"open_flags!\",\n                      max(f.created_at)                                   AS \"last_flagged_at!\",\n                      (array_agg(f.id ORDER BY f.created_at DESC, f.id DESC))[1] AS \"flag!\",\n                      abuse_standing(o.id)                                AS \"standing!\"\n                 FROM abuse_flag f\n                 JOIN organisation o ON o.id = f.org_id\n                WHERE ($1 OR EXISTS (SELECT 1 FROM abuse_flag x\n                                      WHERE x.org_id = f.org_id AND x.resolved_at IS NULL))\n                  AND ($2::uuid[] IS NULL OR o.id = ANY($2))\n                GROUP BY o.id\n                ORDER BY 4 DESC, 8 DESC\n                LIMIT 500",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "score!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "open_kinds!",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 5,
+        "name": "all_kinds!",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "open_flags!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_flagged_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "flag!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "standing!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e395dbcb44fbddbf436ab1810bc134fb60885518f3a52a4c3ed7876a69c67948"
+}

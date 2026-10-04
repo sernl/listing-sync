@@ -1056,6 +1056,22 @@ pub(crate) async fn webhook(
     // below makes of it. A fault here is answered as one, and Stripe's retry
     // re-runs both halves; each is idempotent on its own key.
     crate::payments::record_webhook(&state, &body).await?;
+    // A successful charge names the card it was paid with; the linkage
+    // ledger (migration 0105) keeps its digest so two accounts paying with
+    // one card can be seen. Evidence, not fulfilment: a failure is logged
+    // and the nightly sweep catches the charge up.
+    if event.kind == "charge.succeeded" {
+        if let Some(charge) = event
+            .data
+            .object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+        {
+            if let Err(error) = crate::abuse::harvest_cards(&state, Some(charge)).await {
+                eprintln!("tam-api: a card fingerprint was not recorded: {error}");
+            }
+        }
+    }
     match event.kind.as_str() {
         CHECKOUT_COMPLETED => checkout_completed(&state, &event).await,
         INVOICE_PAID => invoice_paid(&state, &event).await,

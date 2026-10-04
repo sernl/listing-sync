@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH signup AS (\n               SELECT s.org_id, s.value_hash, s.first_seen\n                 FROM account_link_signal s\n                 JOIN organisation o ON o.id = s.org_id\n                WHERE s.kind = 'ip' AND s.first_seen <= o.created_at + interval '1 hour'\n           ), burst AS (\n               SELECT org_id, value_hash, first_seen,\n                      count(*) OVER (PARTITION BY value_hash ORDER BY first_seen\n                                     RANGE BETWEEN interval '24 hours' PRECEDING\n                                               AND interval '24 hours' FOLLOWING) AS n\n                 FROM signup\n           )\n           INSERT INTO abuse_flag (id, org_id, kind, score, reason, created_at)\n           SELECT gen_random_uuid(), b.org_id, $2, $3,\n                  'One of ' || max(b.n) || ' accounts made from the same address within a day.',\n                  $4\n             FROM burst b\n            WHERE b.n >= 3\n              AND ($1::uuid IS NULL OR b.value_hash IN\n                     (SELECT value_hash FROM signup WHERE org_id = $1))\n              AND NOT EXISTS (\n                    SELECT 1 FROM abuse_flag f\n                     WHERE f.org_id = b.org_id AND f.kind = $2\n                       AND (f.resolved_at IS NULL OR f.resolved_at >= b.first_seen))\n            GROUP BY b.org_id\n           ON CONFLICT (org_id, kind) WHERE resolved_at IS NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f48a59e5f06ac93bf99b77fd5058c48401f905ff692d84035b1d13182472a06c"
+}

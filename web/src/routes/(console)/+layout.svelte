@@ -19,6 +19,7 @@
 	import MaintenanceCard from '$lib/MaintenanceCard.svelte';
 	import Toasts from '$lib/Toasts.svelte';
 	import TermsConsentSheet from '$lib/TermsConsentSheet.svelte';
+	import SuspendedNotice from '$lib/SuspendedNotice.svelte';
 	import { activeSeason, siteGate } from '$lib/site';
 
 	let { data, children } = $props();
@@ -38,7 +39,7 @@
 	// rather than on the home page.
 	const signIn = $derived(signInHref(page.url.pathname, page.url.search));
 	$effect(() => {
-		if (!data.session && !data.unreachable && signedOut === 'redirecting') {
+		if (!data.session && !data.unreachable && !data.suspended && signedOut === 'redirecting') {
 			goto(signIn);
 		}
 	});
@@ -103,7 +104,18 @@
 </script>
 
 <QueryClientProvider client={queryClient}>
-	{#if data.unreachable}
+	{#if data.suspended}
+		<!-- The organisation is banned. Ahead of the sign-in redirect, which
+		     would only end at the same refusal and so loop. -->
+		<div class="auth">
+			<div class="wordmark">
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
+			</div>
+			<div class="auth-card">
+				<SuspendedNotice onSignOut={logout} />
+			</div>
+		</div>
+	{:else if data.unreachable}
 		<!-- The first request got no Teachouse answer. Ahead of every other
 		     branch, because nothing below can be trusted: there is no session
 		     to render and no proof there is none. The sentence names what

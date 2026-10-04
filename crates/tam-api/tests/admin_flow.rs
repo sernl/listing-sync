@@ -38,7 +38,7 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 11] = [
+const ADMIN_PATHS: [&str; 13] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -50,6 +50,8 @@ const ADMIN_PATHS: [&str; 11] = [
     "/v1/admin/users",
     "/v1/admin/consents",
     "/v1/admin/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/consent",
+    "/v1/admin/abuse/flags",
+    "/v1/admin/abuse/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 ];
 
 /// The mounted operator route `ADMIN_PATHS` does not carry, named rather than
@@ -65,7 +67,7 @@ const ADMIN_PATHS: [&str; 11] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 38] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 39] = [
     "/{version}/admin/marketplace-requests",
     // Pricing and the site switches read the application pool, like the
     // guides below, so they serve with no backoffice database; their
@@ -132,6 +134,10 @@ const ADMIN_PATHS_UNCOVERED: [&str; 38] = [
     // serves with no backoffice pool. Its refusal for a seller and an
     // anonymous caller is asserted in `admin_analytics_flow`.
     "/{version}/admin/analytics/site",
+    // The operator's abuse decision: a POST on the application pool. Its
+    // refusal for a seller and an anonymous caller is asserted in
+    // `abuse_flow`.
+    "/{version}/admin/abuse/flags/{id}/{action}",
 ];
 
 #[expect(

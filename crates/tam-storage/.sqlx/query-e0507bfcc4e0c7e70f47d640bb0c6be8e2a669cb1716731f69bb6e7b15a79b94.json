@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE abuse_flag SET resolved_at = $2::timestamptz, resolved_by = $3, action = $4, action_reason = $5, mail_requested_at = CASE WHEN $6::bool THEN $2::timestamptz END, mail_due_at = CASE WHEN $6::bool THEN $2::timestamptz END, mail_attempts = 0, mail_sent_at = NULL, mail_error = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0507bfcc4e0c7e70f47d640bb0c6be8e2a669cb1716731f69bb6e7b15a79b94"
+}

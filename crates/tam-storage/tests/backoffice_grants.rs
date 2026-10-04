@@ -268,6 +268,13 @@ async fn the_backoffice_role_cannot_write_a_table_it_reads(app: PgPool) {
         "INSERT INTO account_deletion (subject, email_hash, org_id, requested_at) \
          VALUES (gen_random_uuid(), repeat('a', 64), gen_random_uuid(), now())",
         "DELETE FROM account_deletion",
+        // Migrations 0105 and 0106: the operator reads the abuse ledger and
+        // its decisions; every write is the application pool's.
+        "INSERT INTO abuse_flag (id, org_id, kind, score, reason, created_at) \
+         VALUES (gen_random_uuid(), gen_random_uuid(), 'shared_shop', 1, 'x', now())",
+        "UPDATE abuse_flag SET action = 'ban'",
+        "DELETE FROM banned_identity",
+        "DELETE FROM account_link_signal",
     ] {
         let denied = sqlx::query(statement).execute(&backoffice).await;
         assert!(
@@ -331,6 +338,9 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "refund",
         // Migration 0107's decision, migration 0102's reason.
         "refund_request",
+        // Migration 0105's decision: the record that a shop has had its five
+        // free moves is the grant's own, read by nothing on the operator side.
+        "storefront_grant_record",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
@@ -363,6 +373,10 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "account_consent",
         // Migration 0104: a global table, so the grant alone opens it.
         "account_deletion",
+        // Migrations 0105 and 0106: the Abuse page's three reads.
+        "account_link_signal",
+        "abuse_flag",
+        "banned_identity",
     ] {
         let allowed = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

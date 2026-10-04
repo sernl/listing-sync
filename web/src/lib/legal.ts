@@ -62,16 +62,37 @@ export function consentBody(
 	return { terms_privacy: true, ip_ownership: true, age_18: true, version };
 }
 
+/** The three sentences the identity service refuses a sign-up with. */
+export const SIGNUP_REFUSALS = {
+	disposable: 'Please use a school or personal email address.',
+	velocity:
+		'Too many accounts were made from this network today. Please try again tomorrow or email contact@teachouse.io.',
+	suspended: 'This account is suspended. Email contact@teachouse.io.'
+} as const;
+
+const REFUSAL_SENTENCES: readonly string[] = Object.values(SIGNUP_REFUSALS);
+
 /** The sentences for the `?error=` codes a social sign-in or sign-up returns
- *  with, keyed by the code; null for a code that is not about the agreement. */
-export function socialConsentError(code: string | null): string | null {
-	switch (code) {
+ *  with, keyed by the code; null for a code that is not about the agreement.
+ *
+ *  A refused sign-up (`SIGNUP_REFUSED`) carries its sentence in
+ *  `?error_description=`; only one of the identity service's own three is
+ *  shown, so the query string cannot put words on this page. */
+export function socialConsentError(
+	code: string | null,
+	description: string | null = null
+): string | null {
+	switch (code?.toLowerCase()) {
 		case 'signup_disabled':
 			return 'No Teachouse account uses that sign-in yet. Create one on the sign-up page first.';
 		case 'consent_unavailable':
 			return 'We could not record your agreement, so your account was not created. Please try again in a minute.';
 		case 'unable_to_create_user':
 			return CONSENT_REFUSAL;
+		case 'signup_refused':
+			return description !== null && REFUSAL_SENTENCES.includes(description)
+				? description
+				: SIGNUP_REFUSALS.disposable;
 		default:
 			return null;
 	}

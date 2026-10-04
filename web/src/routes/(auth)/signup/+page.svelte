@@ -59,7 +59,12 @@
 	 *  nothing on this page makes an account without it. */
 	const agreement = $derived(consentBody({ terms, age }));
 	/** Why a provider sign-up came back here rather than signed in. */
-	const returnedRefusal = $derived(socialConsentError(page.url.searchParams.get('error')));
+	const returnedRefusal = $derived(
+		socialConsentError(
+			page.url.searchParams.get('error'),
+			page.url.searchParams.get('error_description')
+		)
+	);
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {

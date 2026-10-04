@@ -51,6 +51,17 @@ export class ApiFailure extends Error {
 	}
 }
 
+/** Whether a failure is the API refusing a suspended account. Its kind is
+ *  `unauthenticated`, so this is asked before anything reads a refusal as
+ *  "go and sign in": signing in again only ends at the same refusal. */
+export function isSuspended(failure: unknown): boolean {
+	return (
+		failure instanceof ApiFailure &&
+		failure.status === 403 &&
+		failure.code() === 'account_suspended'
+	);
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(path, {
 		...init,

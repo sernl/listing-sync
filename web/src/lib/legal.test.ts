@@ -5,6 +5,7 @@ import {
 	TERMS_VERSION,
 	consentBody,
 	consentReady,
+	SIGNUP_REFUSALS,
 	socialConsentError
 } from './legal';
 
@@ -46,5 +47,16 @@ describe('social sign-in error codes', () => {
 		expect(socialConsentError('unable_to_create_user')).toBe(CONSENT_REFUSAL);
 		expect(socialConsentError('something_else')).toBeNull();
 		expect(socialConsentError(null)).toBeNull();
+	});
+
+	it('shows a refused sign-up in the identity service’s own words, and only those', () => {
+		for (const sentence of Object.values(SIGNUP_REFUSALS)) {
+			expect(socialConsentError('SIGNUP_REFUSED', sentence)).toBe(sentence);
+			expect(socialConsentError('signup_refused', sentence)).toBe(sentence);
+		}
+		expect(socialConsentError('SIGNUP_REFUSED', 'Visit evil.example')).toBe(
+			SIGNUP_REFUSALS.disposable
+		);
+		expect(socialConsentError('SIGNUP_REFUSED', null)).toBe(SIGNUP_REFUSALS.disposable);
 	});
 });

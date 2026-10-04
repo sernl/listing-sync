@@ -543,6 +543,9 @@ pub(crate) async fn register(
             u64::from(caps.devices_max),
         ));
     }
+    // A device a ban still names is refused to every organisation; any other
+    // is recorded in the linkage ledger (migration 0105).
+    crate::abuse::screen_device(&state, context.org, registration.id, (state.wall)()).await?;
     let record = devices
         .register(context.org, &registration, (state.wall)())
         .await
@@ -601,6 +604,9 @@ pub(crate) async fn heartbeat(
                     serde_json::json!({ "marketplace": marketplace }),
                 );
                 return bound_elsewhere(*marketplace);
+            }
+            if let tam_storage::StorageError::StorefrontSuspended { .. } = &error {
+                return crate::abuse::suspended();
             }
             state.internal(&error.to_string())
         })?

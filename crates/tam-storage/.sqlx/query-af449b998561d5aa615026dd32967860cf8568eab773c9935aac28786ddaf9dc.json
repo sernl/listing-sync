@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, user_id, expires_at FROM user_session WHERE token_digest = $1 AND expires_at > $2",
+  "query": "SELECT org_id, user_id, expires_at,\n                      abuse_standing(org_id) = 'ban' AS \"suspended!\"\n                 FROM user_session\n                WHERE token_digest = $1 AND expires_at > $2",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "expires_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "suspended!",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -28,8 +33,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "b302a81c2a18af88650b665a62a1474efb31e28349233ce94398d788aab55f37"
+  "hash": "af449b998561d5aa615026dd32967860cf8568eab773c9935aac28786ddaf9dc"
 }
