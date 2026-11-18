@@ -19,6 +19,7 @@ import { consentHooks, consentUnavailable, PendingConsents, parseConsent } from 
 import { deliver } from './email.ts';
 import { env } from './env.ts';
 import { vouchedByProvider } from './provider-profile.ts';
+import { rateLimit } from './rate-limit.ts';
 import { greetingFor, utcTime } from './template.ts';
 
 export const pool = new pg.Pool({ connectionString: env.databaseUrl });
@@ -215,7 +216,8 @@ export const auth = betterAuth({
   telemetry: { enabled: false },
   // The client's address: Cloudflare's header first, see client-ip.ts.
   advanced: { database: { generateId: 'uuid' }, ipAddress },
-  rateLimit: { enabled: true, storage: 'database' },
+  // The health route is exempt, see rate-limit.ts.
+  rateLimit,
   // The session cookie cache is off, explicitly rather than by default.
   // Verified 2026-09-02 against better-auth 1.7.2: with it on, getSession
   // answers out of a signed cookie for `maxAge` seconds (default 300) without
